@@ -102,7 +102,7 @@ impl<T> Entry<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NoVec<T> {
     next: usize,
     entries: Vec<Entry<T>>,

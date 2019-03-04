@@ -180,7 +180,7 @@ impl<T> NoVec<T> {
         self.entries.iter().enumerate().map(|(index, value)| (index, value.option_ref()))
     }
     
-    pub fn entries_iter_mut(&self) -> impl Iterator<Item = (usize, Option<&mut T>)> {
+    pub fn entries_iter_mut(&mut self) -> impl Iterator<Item = (usize, Option<&mut T>)> {
         self.entries.iter_mut().enumerate().map(|(index, value)| (index, value.option_ref_mut()))
     }
     

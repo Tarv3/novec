@@ -31,6 +31,22 @@ impl<Q> KeyIdx<Q> {
             _ => false
         }
     } 
+
+    pub fn key(&self) -> Option<&Q> {
+        match self {
+            KeyIdx::Both { key, .. } => Some(key),
+            KeyIdx::Key(key) => Some(key),
+            _ => None,
+        }
+    }
+
+    pub fn index(&self) -> Option<usize> {
+        match self {
+            KeyIdx::Both { index, .. } => Some(*index),
+            KeyIdx::Index(index) => Some(*index),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]

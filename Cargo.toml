@@ -1,5 +1,5 @@
 [package]
-name = "no-vec"
+name = "novec"
 version = "0.1.0"
 authors = ["Josh <tarv360@gmail.com>"]
 edition = "2018"

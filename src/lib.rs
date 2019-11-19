@@ -74,6 +74,21 @@ impl<T> Entry<T> {
 
         value
     }
+    
+    pub fn swap_data(&mut self, input: T) -> Option<T> {
+        let mut value = None;
+        take(self, |x| {
+            match x {
+                Entry::Data(data) => {
+                    value = Some(data);
+                    Entry::Data(input)
+                }
+                _ => Entry::Data(input)
+            }
+        });
+
+        value
+    }
 
     pub fn insert_data(&mut self, data: T) {
         *self = Entry::Data(data)
@@ -165,6 +180,7 @@ impl<T> NoVec<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
+
         self.entries.iter().enumerate().filter(|(_, x)| x.is_data()).map(|(index, x)| (index, x.data_ref()))
     }
 
@@ -190,7 +206,7 @@ impl<T> NoVec<T> {
             self.entries.push(Entry::Next(i + 1));
         }
     }
-
+    
     pub fn remove(&mut self, index: usize) -> Option<T> {
         if index >= self.entries.len() {
             return None;

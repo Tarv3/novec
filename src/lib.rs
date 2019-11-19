@@ -1,4 +1,7 @@
+pub mod mapped;
+
 use take_mut::take;
+
 
 // None points to the next closest empty entry;
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -102,7 +105,7 @@ impl<T> Entry<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct NoVec<T> {
     next: usize,
     entries: Vec<Entry<T>>,
@@ -129,7 +132,7 @@ impl<T> NoVec<T> {
         self.next
     }
 
-    pub fn entry(&self, index: usize) -> Option<&T> {
+    pub fn get(&self, index: usize) -> Option<&T> {
         if index >= self.entries.len() {
             return None;
         }
@@ -137,7 +140,7 @@ impl<T> NoVec<T> {
         self.entries[index].option_ref()
     }
 
-    pub fn entry_mut(&mut self, index: usize) -> Option<&mut T> {
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         if index >= self.entries.len() {
             return None;
         }
@@ -161,19 +164,19 @@ impl<T> NoVec<T> {
         output
     }
 
-    pub fn id_iter(&self) -> impl Iterator<Item = (usize, &T)> {
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
         self.entries.iter().enumerate().filter(|(_, x)| x.is_data()).map(|(index, x)| (index, x.data_ref()))
     }
 
-    pub fn id_iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
         self.entries.iter_mut().enumerate().filter(|(_, x)| x.is_data()).map(|(index, x)| (index, x.data_ref_mut()))
     }
 
-    pub fn values_iter(&self) -> impl Iterator<Item = &T> {
+    pub fn values(&self) -> impl Iterator<Item = &T> {
         self.entries.iter().filter(|x| x.is_data()).map(|x| x.data_ref())
     }
 
-    pub fn values_iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.entries.iter_mut().filter(|x| x.is_data()).map(|x| x.data_ref_mut())
     }
 
@@ -219,27 +222,33 @@ impl<T> NoVec<T> {
     }
 }
 
-#[test]
-fn it_works() {
-    let mut vec = NoVec::with_capacity(5);
-    vec.push(0);
-    vec.push(1);
-    vec.push(2);
-    vec.push(3);
-    vec.push(4);
-    let output = vec.remove(1);
-    println!("{:?}", vec);
-    assert!(Some(1) == output);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn it_works() {
+        let mut vec = NoVec::with_capacity(5);
+        vec.push(0);
+        vec.push(1);
+        vec.push(2);
+        vec.push(3);
+        vec.push(4);
+        let output = vec.remove(1);
+        println!("{:?}", vec);
+        assert!(Some(1) == output);
+    
+        let output = vec.remove(3);
+        println!("{:?}", vec);
+        assert!(vec.next == 1);
+        assert!(vec.entries[1] == Entry::Next(3));
+    
+        let pos = vec.push(1);
+        println!("{:?}", vec);
+        assert!(vec.next == 3);
+        assert!(pos == 1);
+        assert!(vec.entries[1] == Entry::Data(1));
+        assert!(vec.entries[3] == Entry::Next(5));
+    }
 
-    let output = vec.remove(3);
-    println!("{:?}", vec);
-    assert!(vec.next == 1);
-    assert!(vec.entries[1] == Entry::Next(3));
-
-    let pos = vec.push(1);
-    println!("{:?}", vec);
-    assert!(vec.next == 3);
-    assert!(pos == 1);
-    assert!(vec.entries[1] == Entry::Data(1));
-    assert!(vec.entries[3] == Entry::Next(5));
 }

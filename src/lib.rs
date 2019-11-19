@@ -180,7 +180,6 @@ impl<T> NoVec<T> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
-
         self.entries.iter().enumerate().filter(|(_, x)| x.is_data()).map(|(index, x)| (index, x.data_ref()))
     }
 

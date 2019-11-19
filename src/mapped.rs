@@ -1,12 +1,20 @@
 use crate::*;
 use std::{borrow::Borrow, collections::hash_map::HashMap, hash::Hash};
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum KeyIdx<Q> {
+    Key(Q),
+    Index(usize),
+}
+
+#[derive(Debug)]
 pub struct Occupied<'a, K: 'a, T: 'a> {
     key: &'a K,
     index: usize,
     value: &'a mut T,
 }
 
+#[derive(Debug)]
 pub struct VacantEntry<'a, K: 'a, T: 'a>
 where
     K: Hash + Clone + Eq,
@@ -15,6 +23,7 @@ where
     storage: &'a mut MappedNovec<K, T>,
 }
 
+#[derive(Debug)]
 pub enum Entry<'a, K: 'a, T: 'a>
 where
     K: Hash + Clone + Eq,
@@ -32,7 +41,7 @@ where
             Entry::Occupied(Occupied { value, index, .. }) => (index, value),
             Entry::VacantEntry(VacantEntry { key, storage }) => {
                 let index = storage.insert(key, default);
-                (index, storage.get_mut(index).unwrap())
+                (index, storage.get_mut_by_index(index).unwrap())
             }
         }
     }
@@ -92,12 +101,67 @@ where
         }
     }
 
-    pub fn get(&self, index: usize) -> Option<&T> {
+    pub fn key_to_idx<Q>(&self, key_index: &mut KeyIdx<Q>) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        match key_index {
+            KeyIdx::Key(key) => {
+                *key_index = match self.get_index(key) {
+                    Some(index) => KeyIdx::Index(index),
+                    None => return false,
+                };
+
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn get<Q>(&self, map_index: &KeyIdx<Q>) -> Option<&T>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        match map_index {
+            KeyIdx::Key(key) => self.get_by_key(key),
+            KeyIdx::Index(index) => self.get_by_index(*index),
+        }
+    }
+
+    pub fn get_mut<Q>(&mut self, map_index: &KeyIdx<Q>) -> Option<&mut T>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        match map_index {
+            KeyIdx::Key(key) => self.get_mut_by_key(key),
+            KeyIdx::Index(index) => self.get_mut_by_index(*index),
+        }
+    }
+
+    pub fn get_index<Q>(&self, key: &Q) -> Option<usize>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.map.get(key).map(|index| *index)
+    }
+
+    pub fn get_by_index(&self, index: usize) -> Option<&T> {
         self.values.get(index)
     }
 
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+    pub fn get_mut_by_index(&mut self, index: usize) -> Option<&mut T> {
         self.values.get_mut(index)
+    }
+
+    pub fn get_key(&self, index: usize) -> Option<&K> {
+        self.keys
+            .get(index)
+            .map(|value| value.as_ref())
+            .unwrap_or(None)
     }
 
     pub fn get_by_key<Q>(&self, key: &Q) -> Option<&T>

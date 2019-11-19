@@ -5,6 +5,32 @@ use std::{borrow::Borrow, collections::hash_map::HashMap, hash::Hash};
 pub enum KeyIdx<Q> {
     Key(Q),
     Index(usize),
+    Both { key: Q, index: usize },
+}
+
+impl<Q> KeyIdx<Q> {
+    pub fn new(key: Option<Q>, index: Option<usize>) -> Option<KeyIdx<Q>> {
+        match (key, index) {
+            (Some(key), Some(index)) => Some(KeyIdx::Both { key, index }),
+            (Some(key), None) => Some(KeyIdx::Key(key)),
+            (None, Some(index)) => Some(KeyIdx::Index(index)),
+            (None, None) => None
+        }
+    }
+
+    pub fn has_key(&self) -> bool {
+        match self {
+            KeyIdx::Key(_) | KeyIdx::Both { .. } => true,
+            _ => false
+        }
+    }
+
+    pub fn has_index(&self) -> bool {
+        match self {
+            KeyIdx::Index(_) | KeyIdx::Both { .. } => true,
+            _ => false
+        }
+    } 
 }
 
 #[derive(Debug)]
@@ -101,22 +127,35 @@ where
         }
     }
 
-    pub fn key_to_idx<Q>(&self, key_index: &mut KeyIdx<Q>) -> bool
+    pub fn fill_key_idx<Q>(&self, key_index: &mut KeyIdx<Q>) -> bool
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Into<Q>,
         Q: Hash + Eq,
     {
-        match key_index {
-            KeyIdx::Key(key) => {
-                *key_index = match self.get_index(key) {
-                    Some(index) => KeyIdx::Index(index),
-                    None => return false,
-                };
+        let mut result = false;
 
-                true
+        take_mut::take(key_index, |key_index| match key_index {
+            KeyIdx::Key(key) => match self.get_index(&key) {
+                Some(index) => KeyIdx::Both { key, index },
+                None => {
+                    result = true;
+                    KeyIdx::Key(key)
+                }
+            },
+            KeyIdx::Index(index) => match self.get_key(index) {
+                Some(key) => KeyIdx::Both { key: key.clone().into(), index },
+                None => {
+                    result = true;
+                    KeyIdx::Index(index)
+                }
+            },
+            KeyIdx::Both { key, index } => {
+                result = true;
+                KeyIdx::Both { key, index }
             }
-            _ => false,
-        }
+        });
+
+        result
     }
 
     pub fn get<Q>(&self, map_index: &KeyIdx<Q>) -> Option<&T>
@@ -127,6 +166,7 @@ where
         match map_index {
             KeyIdx::Key(key) => self.get_by_key(key),
             KeyIdx::Index(index) => self.get_by_index(*index),
+            KeyIdx::Both { index, .. } => self.get_by_index(*index)
         }
     }
 
@@ -138,6 +178,7 @@ where
         match map_index {
             KeyIdx::Key(key) => self.get_mut_by_key(key),
             KeyIdx::Index(index) => self.get_mut_by_index(*index),
+            KeyIdx::Both { index, .. } => self.get_mut_by_index(*index)
         }
     }
 

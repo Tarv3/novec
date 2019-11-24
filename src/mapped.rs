@@ -132,6 +132,14 @@ impl<K, T> MappedNovec<K, T>
 where
     K: Hash + Clone + Eq,
 {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            keys: Vec::new(),
+            values: NoVec::new(),
+        }
+    }
+
     pub fn entry<Q>(&mut self, key: K) -> Entry<K, T> {
         match self.map.get(&key) {
             Some(&index) => Entry::Occupied(Occupied {

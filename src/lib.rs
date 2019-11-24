@@ -1,4 +1,6 @@
 pub mod mapped;
+pub mod oom;
+pub mod persistant;
 
 use take_mut::take;
 

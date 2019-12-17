@@ -6,3 +6,9 @@ edition = "2018"
 
 [dependencies]
 take_mut = "0.2.2"
+serde = { version = "*", features=["derive"], optional = true }
+serde_json = { version = "*", optional = true }
+
+[features]
+default = ["json"]
+json = ["serde", "serde_json"]

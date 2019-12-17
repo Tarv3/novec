@@ -1,54 +1,6 @@
 use crate::*;
 use std::{borrow::Borrow, collections::hash_map::HashMap, hash::Hash};
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum KeyIdx<Q> {
-    Key(Q),
-    Index(usize),
-    Both { key: Q, index: usize },
-}
-
-impl<Q> KeyIdx<Q> {
-    pub fn new(key: Option<Q>, index: Option<usize>) -> Option<KeyIdx<Q>> {
-        match (key, index) {
-            (Some(key), Some(index)) => Some(KeyIdx::Both { key, index }),
-            (Some(key), None) => Some(KeyIdx::Key(key)),
-            (None, Some(index)) => Some(KeyIdx::Index(index)),
-            (None, None) => None
-        }
-    }
-
-    pub fn has_key(&self) -> bool {
-        match self {
-            KeyIdx::Key(_) | KeyIdx::Both { .. } => true,
-            _ => false
-        }
-    }
-
-    pub fn has_index(&self) -> bool {
-        match self {
-            KeyIdx::Index(_) | KeyIdx::Both { .. } => true,
-            _ => false
-        }
-    } 
-
-    pub fn key(&self) -> Option<&Q> {
-        match self {
-            KeyIdx::Both { key, .. } => Some(key),
-            KeyIdx::Key(key) => Some(key),
-            _ => None,
-        }
-    }
-
-    pub fn index(&self) -> Option<usize> {
-        match self {
-            KeyIdx::Both { index, .. } => Some(*index),
-            KeyIdx::Index(index) => Some(*index),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Occupied<'a, K: 'a, T: 'a> {
     key: &'a K,
@@ -151,35 +103,46 @@ where
         }
     }
 
+    // Fills key index, returning true if object existed
     pub fn fill_key_idx<Q>(&self, key_index: &mut KeyIdx<Q>) -> bool
     where
         K: Borrow<Q> + Into<Q>,
         Q: Hash + Eq,
     {
-        let mut result = false;
+        let mut result = true;
 
         take_mut::take(key_index, |key_index| match key_index {
             KeyIdx::Key(key) => match self.get_index(&key) {
                 Some(index) => KeyIdx::Both { key, index },
                 None => {
-                    result = true;
+                    result = false;
                     KeyIdx::Key(key)
                 }
             },
             KeyIdx::Index(index) => match self.get_key(index) {
                 Some(key) => KeyIdx::Both { key: key.clone().into(), index },
                 None => {
-                    result = true;
+                    result = false;
                     KeyIdx::Index(index)
                 }
             },
-            KeyIdx::Both { key, index } => {
-                result = true;
-                KeyIdx::Both { key, index }
-            }
+            KeyIdx::Both { key, index } => KeyIdx::Both { key, index },
         });
 
         result
+    }
+
+    // Fills key index, returning true if object existed
+    pub fn fill_key_idx_get<Q>(&self, key_index: &mut KeyIdx<Q>) -> Option<&T>
+    where
+        K: Borrow<Q> + Into<Q>,
+        Q: Hash + Eq,
+    {
+        if !self.fill_key_idx(key_index) {
+            return None;
+        }
+
+        self.get(key_index)
     }
 
     pub fn get<Q>(&self, map_index: &KeyIdx<Q>) -> Option<&T>

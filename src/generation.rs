@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct StorageId {
     pub index: usize,
@@ -73,14 +75,14 @@ impl<T> StorageObject<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct PersistantStorage<T> {
+pub struct GenerationStorage<T> {
     objects: Vec<StorageObject<T>>,
     available: Vec<usize>,
 }
 
-impl<T> PersistantStorage<T> {
-    pub fn new() -> PersistantStorage<T> {
-        PersistantStorage {
+impl<T> GenerationStorage<T> {
+    pub fn new() -> GenerationStorage<T> {
+        GenerationStorage {
             objects: vec![],
             available: vec![],
         }
@@ -135,7 +137,11 @@ impl<T> PersistantStorage<T> {
     } 
 
     pub fn remove_id(&mut self, id: StorageId) -> Option<T> {
-        self.remove(id.index)
+        if self.contains(id) {
+            return self.remove(id.index);
+        }
+
+        None
     }
 
     pub fn contains(&self, id: StorageId) -> bool {
@@ -222,5 +228,25 @@ impl<T> PersistantStorage<T> {
 
                 (id, x.unwrap_ref_mut())
             })
+    }
+}
+
+impl<T> PersistantStorage<T> for GenerationStorage<T> {
+    type Index = StorageId;
+
+    fn insert(&mut self, value: T) -> StorageId {
+        self.push(value)
+    }
+
+    fn remove(&mut self, index: &StorageId) -> Option<T> {
+        self.remove_id(*index)
+    }
+
+    fn get(&self, index: &StorageId) -> Option<&T> {
+        <GenerationStorage<T>>::get(self, *index)
+    }
+
+    fn get_mut(&mut self, index: &StorageId) -> Option<&mut T> {
+        <GenerationStorage<T>>::get_mut(self, *index)
     }
 }

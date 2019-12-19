@@ -1,5 +1,5 @@
 use take_mut::take;
-
+use super::*;
 
 // None points to the next closest empty entry;
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -234,6 +234,27 @@ impl<T> NoVec<T> {
         value
     }
 }
+
+impl<T> PersistantStorage<T> for NoVec<T> {
+    type Index = usize;
+
+    fn insert(&mut self, value: T) -> usize {
+        self.push(value)
+    }
+
+    fn remove(&mut self, index: &usize) -> Option<T> {
+        <NoVec<T>>::remove(self, *index)
+    }
+
+    fn get(&self, index: &usize) -> Option<&T> {
+       <NoVec<T>>::get(self, *index)
+    }
+
+    fn get_mut(&mut self, index: &usize) -> Option<&mut T> {
+       <NoVec<T>>::get_mut(self, *index)
+    } 
+}
+
 
 #[cfg(test)]
 mod tests {

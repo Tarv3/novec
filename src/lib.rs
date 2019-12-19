@@ -1,20 +1,22 @@
-pub mod mapped;
-pub mod oom;
-pub mod persistant;
+// pub mod mapped;
+// pub mod oom;
+pub mod generation;
 pub mod novec;
-pub mod loader;
+// pub mod loader;
 
-pub use crate::novec::*;
+pub mod map;
+
+// pub use crate::novec::*;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum KeyIdx<Q> {
-    Key(Q),
-    Index(usize),
-    Both { key: Q, index: usize },
+pub enum KeyIdx<K, I> {
+    Key(K),
+    Index(I),
+    Both { key: K, index: I },
 }
 
-impl<Q> KeyIdx<Q> {
-    pub fn new(key: Option<Q>, index: Option<usize>) -> Option<KeyIdx<Q>> {
+impl<K, I> KeyIdx<K, I> {
+    pub fn new(key: Option<K>, index: Option<I>) -> Option<KeyIdx<K, I>> {
         match (key, index) {
             (Some(key), Some(index)) => Some(KeyIdx::Both { key, index }),
             (Some(key), None) => Some(KeyIdx::Key(key)),
@@ -37,7 +39,7 @@ impl<Q> KeyIdx<Q> {
         }
     } 
 
-    pub fn key(&self) -> Option<&Q> {
+    pub fn key(&self) -> Option<&K> {
         match self {
             KeyIdx::Both { key, .. } => Some(key),
             KeyIdx::Key(key) => Some(key),
@@ -45,11 +47,20 @@ impl<Q> KeyIdx<Q> {
         }
     }
 
-    pub fn index(&self) -> Option<usize> {
+    pub fn index(&self) -> Option<&I> {
         match self {
-            KeyIdx::Both { index, .. } => Some(*index),
-            KeyIdx::Index(index) => Some(*index),
+            KeyIdx::Both { index, .. } => Some(index),
+            KeyIdx::Index(index) => Some(index),
             _ => None,
         }
     }
+}
+
+pub trait PersistantStorage<T> {
+    type Index;
+
+    fn insert(&mut self, value: T) -> Self::Index;
+    fn remove(&mut self, index: &Self::Index) -> Option<T>;
+    fn get(&self, index: &Self::Index) -> Option<&T>;
+    fn get_mut(&mut self, index: &Self::Index) -> Option<&mut T>;
 }

@@ -82,7 +82,7 @@ impl<K: Hash + Clone + Eq, T> JsonFile<K, T> {
     {
         let (_, mappings) = load_mappings_from_file(path)?;
 
-        Self::from_mappings(mappings.into_iter())
+        Ok(Self::from_mappings(mappings.into_iter()))
     }
 
     pub fn from_mappings(mappings: impl Iterator<Item = (K, PathBuf)>) -> Self {
@@ -98,7 +98,7 @@ impl<K: Hash + Clone + Eq, T> JsonFile<K, T> {
         }
     }
 
-    pub fn load<Q>(&self, key: Q) -> Result<T, Box<dyn Error>> 
+    pub fn load<Q>(&self, key: &Q) -> Result<T, Box<dyn Error>> 
     where
         T: DeserializeOwned,
         K: Borrow<Q>,
@@ -115,6 +115,47 @@ impl<K: Hash + Clone + Eq, T> JsonFile<K, T> {
         let data = serde_json::from_reader(reader)?;
 
         Ok(data)
+    }
 
+    pub fn hold_load<Q>(&mut self, key: &Q) -> Result<(), Box<dyn Error>> 
+    where
+        T: DeserializeOwned,
+        K: Borrow<Q> + Clone,
+        Q: Hash + Eq
+    {
+        let (key, path) = match self.mapping.get_key_value(key) {
+            Some(kv) => kv,
+            None => return Err(Box::new(MissingMapping)),
+        };
+
+        let file = std::fs::File::open(path)?;
+        let reader = std::io::BufReader::new(file);
+
+        let data = serde_json::from_reader(reader)?; 
+
+        self.loaded.push((key.clone(), data));
+
+        Ok(())
+    }
+}
+
+impl<K, T> Loader<K, T> for JsonFile<K, T>
+where
+    K: Hash + Eq + Clone,
+    T: DeserializeOwned,
+{
+    fn request_load(&mut self, key: &K) -> bool {
+        match self.hold_load(key) {
+            Ok(_) => true,
+            Err(_e) => false,
+        }
+    }
+
+    fn load_now(&mut self, key: &K) -> Result<T, Box<dyn Error>> {
+        self.load(key)
+    }
+
+    fn drain_loaded<F: FnMut((K, T))>(&mut self, f: F) {
+        self.loaded.drain(..).for_each(f);
     }
 }

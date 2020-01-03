@@ -161,6 +161,35 @@ impl<T> NoVec<T> {
         self.entries[index].option_ref_mut()
     }
 
+    pub fn insert_at(&mut self, index: usize, value: T) -> Option<T> {
+        if index == self.next {
+            self.push(value);
+            return None;
+        }
+
+        if index >= self.entries.len() {
+            self.fill_to(index + 1);
+        }
+
+        if self.entries[index].is_data() {
+            let replaced = self.entries[index].swap_data(value).unwrap();
+            
+            return Some(replaced);
+        }
+
+        let next = self.entries[index].unwrap_next(); 
+
+        for i in (0..index).rev() {
+            if self.entries[i].is_next() {
+                self.entries[i].swap_next(next);
+                break;
+            }
+        }
+        
+
+        None
+    }
+
     pub fn push(&mut self, value: T) -> usize {
         let output = self.next;
         if self.next >= self.entries.len() {
@@ -235,8 +264,13 @@ impl<T> NoVec<T> {
     }
 }
 
-impl<T> PersistantStorage<T> for NoVec<T> {
+impl<T> PersistantStorage for NoVec<T> {
     type Index = usize;
+    type Item = T;
+
+    fn insert_at(&mut self, index: &usize, value: T) -> Option<T> {
+        <NoVec<T>>::insert_at(self, *index, value)
+    }
 
     fn insert(&mut self, value: T) -> usize {
         self.push(value)

@@ -87,6 +87,31 @@ impl<T> GenerationStorage<T> {
             available: vec![],
         }
     }
+    
+    pub fn insert(&mut self, id: StorageId, item: T) -> Option<T> {
+        if id.index >= self.objects.len() {
+            self.fill_to(id.index + 1);
+            self.available.pop();
+            let object = &mut self.objects[id.index];
+            object.item = Some(item);
+            object.generation = id.generation;
+
+            return None;
+        }
+
+        let object = &mut self.objects[id.index];
+
+        if object.is_none() {
+            if let Some(position) = self.available.iter().position(|a| *a == id.index) {
+                self.available.swap_remove(position);
+            }
+        }
+
+        object.item = Some(item);
+        object.generation = id.generation;
+
+        None
+    }
 
     pub fn push(&mut self, item: T) -> StorageId {
         match self.available.pop() {
@@ -176,6 +201,13 @@ impl<T> GenerationStorage<T> {
         None
     }
 
+    pub fn fill_to(&mut self, size: usize) {
+        for i in self.objects.len()..size {
+            self.objects.push(StorageObject::empty(0));
+            self.available.push(i);
+        }
+    }
+
     pub fn values<'a>(&'a self) -> impl Iterator<Item = &'a T> + 'a {
         self.objects
             .iter()
@@ -231,8 +263,13 @@ impl<T> GenerationStorage<T> {
     }
 }
 
-impl<T> PersistantStorage<T> for GenerationStorage<T> {
+impl<T> PersistantStorage for GenerationStorage<T> {
     type Index = StorageId;
+    type Item = T;
+
+    fn insert_at(&mut self, index: &StorageId, value: T) -> Option<T> {
+        self.insert(*index, value)
+    }
 
     fn insert(&mut self, value: T) -> StorageId {
         self.push(value)

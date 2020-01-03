@@ -1,8 +1,7 @@
-// pub mod mapped;
-// pub mod oom;
+pub mod oom;
 pub mod generation;
 pub mod novec;
-// pub mod loader;
+pub mod loader;
 
 pub mod map;
 
@@ -56,11 +55,13 @@ impl<K, I> KeyIdx<K, I> {
     }
 }
 
-pub trait PersistantStorage<T> {
+pub trait PersistantStorage {
     type Index;
+    type Item;
 
-    fn insert(&mut self, value: T) -> Self::Index;
-    fn remove(&mut self, index: &Self::Index) -> Option<T>;
-    fn get(&self, index: &Self::Index) -> Option<&T>;
-    fn get_mut(&mut self, index: &Self::Index) -> Option<&mut T>;
+    fn insert_at(&mut self, index: &Self::Index, value: Self::Item) -> Option<Self::Item>;
+    fn insert(&mut self, value: Self::Item) -> Self::Index;
+    fn remove(&mut self, index: &Self::Index) -> Option<Self::Item>;
+    fn get(&self, index: &Self::Index) -> Option<&Self::Item>;
+    fn get_mut(&mut self, index: &Self::Index) -> Option<&mut Self::Item>;
 }

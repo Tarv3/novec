@@ -1,12 +1,12 @@
-use crate::{ *, generation::GenerationStorage, novec::NoVec, };
+use crate::{generation::GenerationStorage, idvec::IdVec, novec::NoVec, *};
 use std::{
     borrow::Borrow,
     collections::hash_map::{Entry as HashEntry, HashMap},
     hash::Hash,
 };
 
-pub type MappedGeneration<K, T> = MappedStorage<GenerationStorage<K>, GenerationStorage<T>>; 
-pub type MappedNoVec<K, T> = MappedStorage<NoVec<K>, NoVec<T>>; 
+pub type MappedGeneration<K, T> = MappedStorage<IdVec<K>, GenerationStorage<T>>;
+pub type MappedNoVec<K, T> = MappedStorage<IdVec<K>, NoVec<T>>;
 
 pub struct Occupied<'a, K: 'a, T: 'a, I: 'a> {
     key: &'a K,
@@ -16,8 +16,8 @@ pub struct Occupied<'a, K: 'a, T: 'a, I: 'a> {
 
 pub struct VacantEntry<'a, K: 'a, S: 'a>
 where
-    S: PersistantStorage,
-    K: PersistantStorage<Index = S::Index>,
+    S: ExpandableStorage,
+    K: UnorderedStorage,
     K::Item: Hash + Eq,
 {
     key: K::Item,
@@ -26,8 +26,8 @@ where
 
 pub enum Entry<'a, K: 'a, S: 'a>
 where
-    S: PersistantStorage,
-    K: PersistantStorage<Index = S::Index>,
+    S: ExpandableStorage,
+    K: UnorderedStorage,
     K::Item: Hash + Eq,
 {
     Occupied(Occupied<'a, K::Item, S::Item, S::Index>),
@@ -36,9 +36,11 @@ where
 
 impl<'a, K: 'a, S: 'a> Entry<'a, K, S>
 where
-    S: PersistantStorage,
-    K: PersistantStorage<Index = S::Index>  ,
+    S: ExpandableStorage,
+    K: UnorderedStorage,
     K::Item: Hash + Eq + Clone,
+    S::Index: Into<K::Index> + Copy,
+    K::Index: Copy,
 {
     pub fn key(&self) -> &K::Item {
         match self {
@@ -58,7 +60,10 @@ where
         }
     }
 
-    pub fn or_insert_with<F: FnOnce() -> S::Item>(self, default: F) -> (&'a S::Index, &'a mut S::Item) {
+    pub fn or_insert_with<F: FnOnce() -> S::Item>(
+        self,
+        default: F,
+    ) -> (&'a S::Index, &'a mut S::Item) {
         self.or_insert(default())
     }
 
@@ -82,8 +87,8 @@ where
 #[derive(Clone, Debug)]
 pub struct MappedStorage<K, S>
 where
-    S: PersistantStorage,
-    K: PersistantStorage<Index = S::Index>,
+    S: ExpandableStorage,
+    K: UnorderedStorage,
     K::Item: Hash + Eq,
 {
     indices: HashMap<K::Item, S::Index>,
@@ -93,27 +98,26 @@ where
 
 impl<K, S> MappedStorage<K, S>
 where
-    S: PersistantStorage + Default,
-    K: PersistantStorage<Index = S::Index> + Default,
+    S: ExpandableStorage + Default,
+    K: UnorderedStorage + Default,
     K::Item: Hash + Eq,
 {
-    pub fn new() -> Self
-    {
+    pub fn new() -> Self {
         MappedStorage {
             indices: HashMap::new(),
             keys: K::default(),
             storage: S::default(),
         }
     }
-
 }
-
 
 impl<K, S> MappedStorage<K, S>
 where
-    S: PersistantStorage,
-    K: PersistantStorage<Index = S::Index>,
+    S: ExpandableStorage,
+    K: UnorderedStorage,
     K::Item: Hash + Eq,
+    S::Index: Into<K::Index> + Copy,
+    K::Index: Copy,
 {
     pub fn entry<Q, I>(&mut self, ki: KeyIdx<Q, I>) -> Option<Entry<K, S>>
     where
@@ -123,8 +127,9 @@ where
     {
         match ki {
             KeyIdx::Index(index) | KeyIdx::Both { index, .. } => {
+                let key_idx: K::Index = index.borrow().clone().into();
                 let value = self.storage.get_mut(index.borrow())?;
-                let key = self.keys.get(index.borrow())?;
+                let key = self.keys.get(&key_idx)?;
                 let index = self.indices.get((&*key).borrow()).unwrap();
 
                 Some(Entry::Occupied(Occupied { key, index, value }))
@@ -134,11 +139,11 @@ where
 
                 if let Some(index) = self.indices.get(&key) {
                     let value = self.storage.get_mut(index)?;
-                    let key = self.keys.get(index)?;
+                    let key = self.keys.get(&index.clone().into())?;
                     Some(Entry::Occupied(Occupied { key, index, value }))
                 } else {
                     // This is to avoid the borrow checker and is valid because nothing else will
-                    // have a reference to self at this point in time 
+                    // have a reference to self at this point in time
                     unsafe {
                         Some(Entry::Vacant(VacantEntry {
                             key: key.into(),
@@ -179,9 +184,7 @@ where
                 Some(index) => self.storage.get_mut(index),
                 None => None,
             },
-            KeyIdx::Both { index, .. } => {
-                self.storage.get_mut(index.borrow())
-            }
+            KeyIdx::Both { index, .. } => self.storage.get_mut(index.borrow()),
         }
     }
 
@@ -227,7 +230,7 @@ where
     where
         I: Borrow<S::Index>,
     {
-        self.keys.get(index.borrow())
+        self.keys.get(&index.borrow().clone().into())
     }
 
     pub fn fill_key_idx<Q, I>(&self, key_idx: &mut KeyIdx<Q, I>) -> bool
@@ -271,7 +274,7 @@ where
         K::Item: Borrow<Q> + Into<Q> + Clone,
         S::Index: Borrow<I> + Into<I> + Clone,
         Q: Hash + Eq,
-        I: Hash + Eq + Borrow<S::Index>,
+        I: Borrow<S::Index>,
     {
         if !self.fill_key_idx(key_idx) {
             return None;
@@ -280,12 +283,26 @@ where
         self.get(key_idx)
     }
 
-    pub fn insert(&mut self, key: K::Item, value: S::Item) -> (&S::Index, Option<S::Item>) 
+    pub fn fill_key_idx_get_mut<Q, I>(&mut self, key_idx: &mut KeyIdx<Q, I>) -> Option<&mut S::Item>
     where
-        K::Item: Clone
+        K::Item: Borrow<Q> + Into<Q> + Clone,
+        S::Index: Borrow<I> + Into<I> + Clone,
+        Q: Hash + Eq,
+        I: Borrow<S::Index>,
     {
-        let index = self.storage.insert(value);
-        self.keys.insert_at(&index, key.clone());
+        if !self.fill_key_idx(key_idx) {
+            return None;
+        }
+
+        self.get_mut(key_idx)
+    }
+
+    pub fn insert(&mut self, key: K::Item, value: S::Item) -> (&S::Index, Option<S::Item>)
+    where
+        K::Item: Clone,
+    {
+        let index = self.storage.push(value);
+        self.keys.insert(&index.into(), key.clone());
 
         match self.indices.entry(key) {
             HashEntry::Occupied(mut occupied) => {
@@ -297,12 +314,16 @@ where
         }
     }
 
-    pub fn insert_get(&mut self, key: K::Item, value: S::Item) -> (&S::Index, &mut S::Item, Option<S::Item>) 
+    pub fn insert_get(
+        &mut self,
+        key: K::Item,
+        value: S::Item,
+    ) -> (&S::Index, &mut S::Item, Option<S::Item>)
     where
-        K::Item: Clone
+        K::Item: Clone,
     {
-        let index = self.storage.insert(value);
-        self.keys.insert_at(&index, key.clone());
+        let index = self.storage.push(value);
+        self.keys.insert(&index.into(), key.clone());
 
         match self.indices.entry(key) {
             HashEntry::Occupied(mut occupied) => {
@@ -327,7 +348,9 @@ where
     {
         match ki {
             KeyIdx::Index(index) | KeyIdx::Both { index, .. } => {
-                self.keys.remove(index.borrow()).map(|key| self.indices.remove(key.borrow()));
+                self.keys
+                    .remove(&index.borrow().clone().into())
+                    .map(|key| self.indices.remove(key.borrow()));
                 self.storage.remove(index.borrow())
             }
             KeyIdx::Key(key) => self
@@ -339,7 +362,9 @@ where
     }
 
     // Iterates in same order as hash map
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a K::Item, &'a S::Index, &'a S::Item)> + 'a {
+    pub fn iter<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (&'a K::Item, &'a S::Index, &'a S::Item)> + 'a {
         self.indices.iter().map(move |(key, idx)| {
             let value = self.storage.get(idx).unwrap();
             (key, idx, value)

@@ -1,8 +1,8 @@
 // #[cfg(feature = "json")]
 // pub mod json_file;
 
-use crate::{ map::MappedStorage, KeyIdx, PersistantStorage};
-use std::{ hash::Hash, error::Error};
+use crate::{ map::MappedStorage, KeyIdx, ExpandableStorage, UnorderedStorage };
+use std::{ hash::Hash, error::Error, borrow::Borrow};
 
 pub trait Loader {
     type Key;
@@ -15,9 +15,11 @@ pub trait Loader {
 
 pub struct StorageSystem<K, S, L> 
 where
-    S: PersistantStorage,
-    K: PersistantStorage<Index = S::Index>,
+    S: ExpandableStorage,
+    K: UnorderedStorage<Index = S::Index>,
     K::Item: Hash + Eq,
+    S::Index: Borrow<K::Index>,
+    K::Index: Clone,
     L: Loader<Key = K::Item>, 
     L::Item: Into<S::Item>
 {
@@ -27,9 +29,11 @@ where
 
 impl<K, S, L> StorageSystem<K, S, L> 
 where
-    S: PersistantStorage,
-    K: PersistantStorage<Index = S::Index>,
+    S: ExpandableStorage,
+    K: UnorderedStorage<Index = S::Index>,
     K::Item: Hash + Eq,
+    S::Index: Borrow<K::Index>,
+    K::Index: Clone,
     L: Loader<Key = K::Item>, 
     L::Item: Into<S::Item>
 {

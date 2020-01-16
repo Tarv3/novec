@@ -8,6 +8,7 @@ edition = "2018"
 take_mut = "0.2.2"
 serde = { version = "*", features=["derive"], optional = true }
 serde_json = { version = "*", optional = true }
+derive_deref = "1"
 
 [features]
 default = ["json"]

@@ -264,16 +264,12 @@ impl<T> NoVec<T> {
     }
 }
 
-impl<T> PersistantStorage for NoVec<T> {
+impl<T> UnorderedStorage for NoVec<T> {
     type Index = usize;
     type Item = T;
 
-    fn insert_at(&mut self, index: &usize, value: T) -> Option<T> {
+    fn insert(&mut self, index: &usize, value: T) -> Option<T> {
         <NoVec<T>>::insert_at(self, *index, value)
-    }
-
-    fn insert(&mut self, value: T) -> usize {
-        self.push(value)
     }
 
     fn remove(&mut self, index: &usize) -> Option<T> {
@@ -287,6 +283,12 @@ impl<T> PersistantStorage for NoVec<T> {
     fn get_mut(&mut self, index: &usize) -> Option<&mut T> {
        <NoVec<T>>::get_mut(self, *index)
     } 
+}
+
+impl<T> ExpandableStorage for NoVec<T> {
+    fn push(&mut self, value: T) -> usize {
+        self.push(value)
+    }
 }
 
 

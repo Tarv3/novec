@@ -2,8 +2,12 @@ pub mod oom;
 pub mod generation;
 pub mod novec;
 pub mod loader;
+pub mod idvec;
 
 pub mod map;
+
+#[cfg(test)]
+mod test;
 
 // pub use crate::novec::*;
 
@@ -53,15 +57,34 @@ impl<K, I> KeyIdx<K, I> {
             _ => None,
         }
     }
+
+    pub fn into_key(self) -> Option<K> {
+        match self {
+            Self::Key(key) => Some(key),
+            Self::Both{ key, .. } => Some(key),
+            _ => None 
+        }
+    }
+
+    pub fn into_index(self) -> Option<I> {
+        match self {
+            Self::Index(index) => Some(index),
+            Self::Both{ index, .. } => Some(index),
+            _ => None 
+        }
+    }
 }
 
-pub trait PersistantStorage {
+pub trait UnorderedStorage {
     type Index;
     type Item;
 
-    fn insert_at(&mut self, index: &Self::Index, value: Self::Item) -> Option<Self::Item>;
-    fn insert(&mut self, value: Self::Item) -> Self::Index;
+    fn insert(&mut self, index: &Self::Index, value: Self::Item) -> Option<Self::Item>;
     fn remove(&mut self, index: &Self::Index) -> Option<Self::Item>;
     fn get(&self, index: &Self::Index) -> Option<&Self::Item>;
     fn get_mut(&mut self, index: &Self::Index) -> Option<&mut Self::Item>;
+}
+
+pub trait ExpandableStorage: UnorderedStorage {
+    fn push(&mut self, value: Self::Item) -> Self::Index;
 }

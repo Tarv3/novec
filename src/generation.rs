@@ -1,9 +1,15 @@
-use super::*;
+use crate::{*, idvec::IdVecIndex};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct StorageId {
     pub index: usize,
     pub generation: u64,
+}
+
+impl Into<IdVecIndex> for StorageId {
+    fn into(self) -> IdVecIndex {
+        IdVecIndex(self.index)
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -54,7 +60,7 @@ impl<T> StorageObject<T> {
         }
     }
 
-    pub fn unwrap_ref_mut(&mut self) -> &mut T {
+    pub fn unwrap_mut(&mut self) -> &mut T {
         match &mut self.item {
             Some(item) => item,
             _ => panic!("Tried to unwrap None storage object"),
@@ -78,6 +84,12 @@ impl<T> StorageObject<T> {
 pub struct GenerationStorage<T> {
     objects: Vec<StorageObject<T>>,
     available: Vec<usize>,
+}
+
+impl<T> Default for GenerationStorage<T> {
+    fn default() -> Self {
+        GenerationStorage::new()
+    }
 }
 
 impl<T> GenerationStorage<T> {
@@ -219,7 +231,7 @@ impl<T> GenerationStorage<T> {
         self.objects
             .iter_mut()
             .filter(|x| x.is_some())
-            .map(|x| x.unwrap_ref_mut())
+            .map(|x| x.unwrap_mut())
     }
 
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = &StorageObject<T>> + 'a {
@@ -258,21 +270,17 @@ impl<T> GenerationStorage<T> {
                     generation,
                 };
 
-                (id, x.unwrap_ref_mut())
+                (id, x.unwrap_mut())
             })
     }
 }
 
-impl<T> PersistantStorage for GenerationStorage<T> {
+impl<T> UnorderedStorage for GenerationStorage<T> {
     type Index = StorageId;
     type Item = T;
 
-    fn insert_at(&mut self, index: &StorageId, value: T) -> Option<T> {
+    fn insert(&mut self, index: &StorageId, value: T) -> Option<T> {
         self.insert(*index, value)
-    }
-
-    fn insert(&mut self, value: T) -> StorageId {
-        self.push(value)
     }
 
     fn remove(&mut self, index: &StorageId) -> Option<T> {
@@ -285,5 +293,11 @@ impl<T> PersistantStorage for GenerationStorage<T> {
 
     fn get_mut(&mut self, index: &StorageId) -> Option<&mut T> {
         <GenerationStorage<T>>::get_mut(self, *index)
+    }
+}
+
+impl<T> ExpandableStorage for GenerationStorage<T> {
+    fn push(&mut self, value: T) -> StorageId {
+        self.push(value)
     }
 }

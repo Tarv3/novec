@@ -1,15 +1,15 @@
-// #[cfg(feature = "json")]
-// pub mod json_file;
+#[cfg(feature = "json")]
+pub mod json_file;
 pub mod promised;
 
 use crate::{
     generation::GenerationStorage,
     idvec::IdVec,
-    map::{Entry, MappedStorage},
+    map::MappedStorage,
     novec::NoVec,
     ExpandableStorage, KeyIdx, UnorderedStorage,
 };
-use std::{borrow::Borrow, error::Error, hash::Hash};
+use std::{borrow::Borrow, hash::Hash};
 use cbc::*;
 
 pub use promised::*;

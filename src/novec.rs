@@ -290,35 +290,3 @@ impl<T> ExpandableStorage for NoVec<T> {
         self.push(value)
     }
 }
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn it_works() {
-        let mut vec = NoVec::with_capacity(5);
-        vec.push(0);
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
-        vec.push(4);
-        let output = vec.remove(1);
-        println!("{:?}", vec);
-        assert!(Some(1) == output);
-    
-        let output = vec.remove(3);
-        println!("{:?}", vec);
-        assert!(vec.next == 1);
-        assert!(vec.entries[1] == Entry::Next(3));
-    
-        let pos = vec.push(1);
-        println!("{:?}", vec);
-        assert!(vec.next == 3);
-        assert!(pos == 1);
-        assert!(vec.entries[1] == Entry::Data(1));
-        assert!(vec.entries[3] == Entry::Next(5));
-    }
-
-}

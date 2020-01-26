@@ -50,6 +50,20 @@ impl<K, I> KeyIdx<K, I> {
         }
     }
 
+    pub fn is_only_index(&self) -> bool {
+        match self {
+            KeyIdx::Index(_) => true,
+            _ => false
+        }
+    }
+
+    pub fn is_only_key(&self) -> bool {
+        match self {
+            KeyIdx::Key(_) => true,
+            _ => false
+        }
+    }
+
     pub fn index(&self) -> Option<&I> {
         match self {
             KeyIdx::Both { index, .. } => Some(index),

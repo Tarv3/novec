@@ -1,4 +1,20 @@
-use crate::{generation::*, map::*, *};
+use crate::{generation::*, map::*, *, loader::*};
+
+#[derive(Copy, Clone, Debug, Default)]
+struct TestLoader;
+
+impl Loader for TestLoader {
+    type Key = String;
+    type Item = f32;
+
+    fn load(&self, _key: String, mut into: OneTimeLock<Self::Item>) -> bool {
+        into.write(32.0);
+
+        into.unlock();
+
+        true
+    }
+}
 
 #[test]
 fn mapped_generation_test() {
@@ -30,4 +46,17 @@ fn mapped_generation_test() {
     assert!(
         item.map(|item| &item[..]) == Some("what a cool dude")
     );
+}
+
+#[test]
+fn loader_test() {
+    let mut generation: GenerationSystem<String, TestLoader, f32> = GenerationSystem::new();
+    let mut key = KeyIdx::new(Some("test".to_string()), None).unwrap();
+
+    generation.load(&mut key);
+    generation.update_loaded();
+    dbg!(generation.get(&key));
+
+    assert!(generation.get(&key) == Some(&32.0));
+
 }

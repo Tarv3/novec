@@ -5,10 +5,11 @@ authors = ["Josh <tarv360@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-take_mut = "0.2.2"
+take_mut = "0.2"
 serde = { version = "*", features=["derive"], optional = true }
 serde_json = { version = "*", optional = true }
 derive_deref = "1"
+cbc = { version = "0.4.0", package = "crossbeam-channel" }
 
 [features]
 default = ["json"]

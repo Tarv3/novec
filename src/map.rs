@@ -14,6 +14,16 @@ pub struct Occupied<'a, K: 'a, T: 'a, I: 'a> {
     value: &'a mut T,
 }
 
+impl<'a, K, T, I> Occupied<'a, K, T, I> {
+    pub fn get(&self) -> &T {
+        self.value
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.value
+    }
+}
+
 pub struct VacantEntry<'a, K: 'a, S: 'a>
 where
     S: ExpandableStorage,
@@ -155,6 +165,15 @@ where
         }
     }
 
+    pub fn contains<Q, I>(&self, ki: &KeyIdx<Q, I>) -> bool
+    where
+        K::Item: Borrow<Q>,
+        I: Borrow<S::Index>,
+        Q: Hash + Eq,
+    {
+        self.get(ki).is_some()
+    }
+
     pub fn get<Q, I>(&self, ki: &KeyIdx<Q, I>) -> Option<&S::Item>
     where
         K::Item: Borrow<Q>,
@@ -162,13 +181,12 @@ where
         Q: Hash + Eq,
     {
         match ki {
-            KeyIdx::Index(index) => self.storage.get(index.borrow()),
+            KeyIdx::Index(index) | KeyIdx::Both { index, .. } => self.storage.get(index.borrow()),
             KeyIdx::Key(key) => self
                 .indices
                 .get(key)
                 .map(|index| self.storage.get(index))
                 .unwrap_or(None),
-            KeyIdx::Both { index, .. } => self.storage.get(index.borrow()),
         }
     }
 
@@ -295,6 +313,35 @@ where
         }
 
         self.get_mut(key_idx)
+    }
+
+    pub fn insert_replace_idx<Q, I>(
+        &mut self,
+        key_idx: &mut KeyIdx<Q, I>,
+        value: S::Item,
+    ) -> Option<S::Item>
+    where
+        K::Item: Clone,
+        S::Index: Borrow<I> + Into<I> + Clone,
+        Q: Hash + Eq + Into<K::Item> + Clone,
+        I: Borrow<S::Index>,
+    {
+        if key_idx.is_only_index() {
+            return None;
+        }
+
+        let mut swapped = None;
+
+        take_mut::take(key_idx, |ki| {
+            let key = ki.into_key().unwrap();
+
+            let (index, removed) = self.insert(key.clone().into(), value);
+            swapped = removed;
+
+            KeyIdx::Both { key, index: index.clone().into() }
+        });
+        
+        swapped
     }
 
     pub fn insert(&mut self, key: K::Item, value: S::Item) -> (&S::Index, Option<S::Item>)

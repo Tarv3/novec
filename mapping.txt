@@ -1,4 +1,0 @@
-"pot" => "this_is_pot.file"
-"candle" => "this_is_candle.file"
-"ball" => "this_is_ball.file"
-"something" => "this_is_something.file"

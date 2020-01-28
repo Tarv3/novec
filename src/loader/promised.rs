@@ -31,7 +31,7 @@ impl<T> OneTimeLock<T> {
             return false;
         }
 
-        self.ready.store(true, Ordering::Relaxed);
+        self.ready.store(true, Ordering::Release);
         true
     }
 }
@@ -69,7 +69,7 @@ impl<T> OneTimeMutex<T> {
     }
 
     pub fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Relaxed)
+        self.ready.load(Ordering::Aquire)
     }
 
     pub fn into_ready(mut self) -> Result<T, OneTimeMutex<T>> {

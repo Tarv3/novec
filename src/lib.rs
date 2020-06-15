@@ -1,3 +1,5 @@
+use std::{hash::Hash, collections::HashMap};
+
 pub mod generation;
 pub mod idvec;
 pub mod loader;
@@ -97,10 +99,30 @@ pub trait UnorderedStorage {
     type Index;
     type Item;
 
-    fn insert(&mut self, index: &Self::Index, value: Self::Item) -> Option<Self::Item>;
+    fn insert(&mut self, index: Self::Index, value: Self::Item) -> Option<Self::Item>;
     fn remove(&mut self, index: &Self::Index) -> Option<Self::Item>;
     fn get(&self, index: &Self::Index) -> Option<&Self::Item>;
     fn get_mut<'a, 'b>(&'a mut self, index: &'b Self::Index) -> Option<&'a mut Self::Item>;
+}
+
+impl<K, T> UnorderedStorage for HashMap<K, T> 
+where
+    K: Hash + Eq,
+{
+    type Index = K;
+    type Item = T;
+    fn insert(&mut self, index: Self::Index, value: Self::Item) -> Option<Self::Item> {
+        <HashMap<K, T>>::insert(self, index, value)
+    }
+    fn remove(&mut self, index: &Self::Index) -> Option<Self::Item> {
+        <HashMap<K, T>>::remove(self, index)
+    }
+    fn get(&self, index: &Self::Index) -> Option<&Self::Item> {
+        <HashMap<K, T>>::get(self, index)
+    }
+    fn get_mut<'a, 'b>(&'a mut self, index: &'b Self::Index) -> Option<&'a mut Self::Item> {
+        <HashMap<K, T>>::get_mut(self, index)
+    }
 }
 
 pub trait ExpandableStorage: UnorderedStorage {

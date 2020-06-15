@@ -1,8 +1,8 @@
 use super::*;
-use std::{collections::HashMap, ops::AddAssign};
+use std::any::TypeId;
 
 pub type ManangedGenSystem<K, L, T, C> =
-    ManagedStorage<IdVec<K>, GenerationStorage<GenericPromise<T>>, L, T, C>;
+    ManagedStorage<IdVec<K>, GenerationStorage<GenericPromise<T>>, L, T, IdVec<C>>;
 pub type ManagedGen<K, T, C> = ManangedGenSystem<K, GenericSender<K>, T, C>;
 
 pub trait Counter {
@@ -42,39 +42,50 @@ impl Counter for u32 {
 pub struct ManagedStorage<K, S, L, T, C>
 where
     S: ExpandableStorage<Item = Promise<T, L::Item>>,
+    S::Index: Into<K::Index> + Copy + Hash + Eq,
     K: UnorderedStorage,
     K::Item: Hash + Eq,
-    S::Index: Into<K::Index> + Copy + Hash + Eq,
     K::Index: Copy,
+    C: UnorderedStorage<Index = K::Index>,
+    C::Item: Counter,
     L: Loader<Key = K::Item>,
-    C: Counter,
 {
     storage: StorageSystem<K, S, L, T>,
-    pub counters: HashMap<S::Index, C>,
-    threshold: C,
+    counters: C,
+    threshold: C::Item,
 }
 
 impl<K, S, L, T, C> ManagedStorage<K, S, L, T, C>
 where
     T: 'static,
     S: ExpandableStorage<Item = Promise<T, L::Item>>,
+    S::Index: Into<K::Index> + Copy + Hash + Eq,
     K: UnorderedStorage,
     K::Item: Hash + Eq,
-    S::Index: Into<K::Index> + Copy + Hash + Eq,
     K::Index: Copy,
+    C: UnorderedStorage<Index = K::Index>,
+    C::Item: Counter,
     L: Loader<Key = K::Item, Meta = TypeId>,
-    C: Counter,
 {
-    pub fn new(storage: StorageSystem<K, S, L, T>, threshold: C) -> Self {
+    pub fn new(storage: StorageSystem<K, S, L, T>, threshold: C::Item) -> Self
+    where
+        C: Default,
+    {
         Self {
             storage,
-            counters: HashMap::default(),
+            counters: C::default(),
             threshold,
         }
     }
 
     pub fn get(&self, ki: &KeyIdx<K::Item, S::Index>) -> Option<&T> {
         self.storage.get(ki)
+    }
+
+    pub fn reset_counter(&mut self, idx: S::Index) {
+        if let Some(value) = self.counters.get_mut(&idx.into()) {
+            *value = C::Item::zero();
+        }
     }
 
     pub fn load(&mut self, ki: &mut KeyIdx<K::Item, S::Index>) -> LoadStatus
@@ -90,7 +101,7 @@ where
     {
         for (_, idx, value) in self.storage.storage.iter_mut() {
             if let UpdateStatus::Updated = value.update()? {
-                self.counters.insert(*idx, C::zero());
+                self.counters.insert((*idx).into(), C::Item::zero());
             }
         }
 
@@ -103,27 +114,28 @@ where
     {
         for (_, idx, value) in self.storage.storage.iter_mut() {
             if let UpdateStatus::Updated = value.update_blocking()? {
-                self.counters.insert(*idx, C::zero());
+                self.counters.insert((*idx).into(), C::Item::zero());
             }
         }
 
         Ok(())
     }
 
-    pub fn increment(&mut self, inc: &C) {
+    pub fn increment(&mut self, inc: &C::Item) {
         let storage = &mut self.storage.storage;
         let counters = &mut self.counters;
         let threshold = &self.threshold;
 
         storage.retain(|idx, _| {
+            let c_idx = (*idx).into();
             let mut result = true;
-            if let Some(value) = counters.get_mut(idx) {
+            if let Some(value) = counters.get_mut(&c_idx) {
                 value.increment(inc);
                 result = value.is_valid(threshold);
             }
 
             if !result {
-                counters.remove(idx);
+                counters.remove(&c_idx);
             }
 
             result
@@ -136,13 +148,14 @@ where
         let threshold = &self.threshold;
 
         storage.retain(|idx, _| {
+            let c_idx = (*idx).into();
             let mut result = true;
-            if let Some(value) = counters.get(idx) {
+            if let Some(value) = counters.get(&c_idx) {
                 result = value.is_valid(threshold);
             }
 
             if !result {
-                counters.remove(idx);
+                counters.remove(&c_idx);
             }
 
             result

@@ -268,8 +268,8 @@ impl<T> UnorderedStorage for NoVec<T> {
     type Index = usize;
     type Item = T;
 
-    fn insert(&mut self, index: &usize, value: T) -> Option<T> {
-        <NoVec<T>>::insert_at(self, *index, value)
+    fn insert(&mut self, index: usize, value: T) -> Option<T> {
+        <NoVec<T>>::insert_at(self, index, value)
     }
 
     fn remove(&mut self, index: &usize) -> Option<T> {

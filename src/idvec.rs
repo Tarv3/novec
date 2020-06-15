@@ -73,8 +73,8 @@ impl<T> UnorderedStorage for IdVec<T> {
     type Index = IdVecIndex;
     type Item = T;
 
-    fn insert(&mut self, index: &Self::Index, value: Self::Item) -> Option<Self::Item> {
-        IdVec::insert(self, **index, value)
+    fn insert(&mut self, index: Self::Index, value: Self::Item) -> Option<Self::Item> {
+        IdVec::insert(self, *index, value)
     }
 
     fn remove(&mut self, index: &Self::Index) -> Option<Self::Item> {

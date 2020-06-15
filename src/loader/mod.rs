@@ -11,7 +11,6 @@ use cbc::*;
 use derive_deref::*;
 use std::{
     any::{Any, TypeId},
-    borrow::Borrow,
     error::Error,
     fmt::{self, Display, Formatter},
     hash::Hash,
@@ -153,7 +152,7 @@ where
 
     pub fn load(&mut self, ki: &mut KeyIdx<K::Item, S::Index>) -> LoadStatus
     where
-        K::Item: Clone
+        K::Item: Clone,
     {
         if self.storage.contains(&*ki) {
             match self.storage.get(ki).unwrap() {

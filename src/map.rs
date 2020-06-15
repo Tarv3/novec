@@ -250,7 +250,7 @@ where
         K::Item: Clone,
     {
         let index = self.storage.push(value);
-        self.keys.insert(&index.into(), key.clone());
+        self.keys.insert(index.into(), key.clone());
 
         match self.indices.entry(key) {
             HashEntry::Occupied(mut occupied) => {
@@ -271,7 +271,7 @@ where
         K::Item: Clone,
     {
         let index = self.storage.push(value);
-        self.keys.insert(&index.into(), key.clone());
+        self.keys.insert(index.into(), key.clone());
 
         match self.indices.entry(key) {
             HashEntry::Occupied(mut occupied) => {
@@ -292,7 +292,7 @@ where
         self.keys
             .remove(&(*index).into())
             .map(|key| self.indices.remove(&key));
-        return self.storage.remove(index);
+        self.storage.remove(index)
     }
 
     pub fn remove(&mut self, ki: &KeyIdx<K::Item, S::Index>) -> Option<S::Item> {
@@ -322,8 +322,8 @@ where
     pub fn iter_mut<'a>(
         &'a mut self,
     ) -> impl Iterator<Item = (&'a K::Item, &'a S::Index, &'a mut S::Item)> + 'a {
-        let indices = &self.indices;
         let values = &mut self.storage;
+        let indices = &self.indices;
 
         indices.iter().map(move |(key, idx)| {
             let value = values.get_mut(idx).unwrap();

@@ -279,8 +279,8 @@ impl<T> UnorderedStorage for GenerationStorage<T> {
     type Index = StorageId;
     type Item = T;
 
-    fn insert(&mut self, index: &StorageId, value: T) -> Option<T> {
-        self.insert(*index, value)
+    fn insert(&mut self, index: StorageId, value: T) -> Option<T> {
+        <GenerationStorage<T>>::insert(self, index, value)
     }
 
     fn remove(&mut self, index: &StorageId) -> Option<T> {

@@ -1,37 +1,93 @@
 #[cfg(feature = "json")]
 pub mod json_file;
+pub mod manager;
 pub mod promised;
 
 use crate::{
-    generation::GenerationStorage,
-    idvec::IdVec,
-    map::MappedStorage,
-    novec::NoVec,
+    generation::GenerationStorage, idvec::IdVec, map::MappedStorage, novec::NoVec,
     ExpandableStorage, KeyIdx, UnorderedStorage,
 };
-use std::{borrow::Borrow, hash::Hash};
 use cbc::*;
+use derive_deref::*;
+use std::{
+    any::{Any, TypeId},
+    borrow::Borrow,
+    error::Error,
+    fmt::{self, Display, Formatter},
+    hash::Hash,
+};
 
 pub use promised::*;
 
-pub type GenerationSystem<K, L, T> =
-    StorageSystem<IdVec<K>, GenerationStorage<PromisedValue<T>>, L, T>;
-pub type NoVecSystem<K, L, T> = StorageSystem<IdVec<K>, NoVec<PromisedValue<T>>, L, T>;
-pub type GenerationLoader<K, T> = GenerationSystem<K, Sender<(K, OneTimeLock<T>)>, T>;
-pub type NoVecLoader<K, T> = NoVecSystem<K, Sender<(K, OneTimeLock<T>)>, T>;
+pub type GenericSender<K> = Sender<(K, PromiseSender<GenericItem, TypeId>)>;
+pub type GenericReceiver<K> = Receiver<(K, PromiseSender<GenericItem, TypeId>)>;
+pub type GenericPromise<T> = Promise<T, GenericItem>;
+
+pub type NoVecSystem<K, L, T> = StorageSystem<IdVec<K>, NoVec<GenericPromise<T>>, L, T>;
+pub type NoVecLoader<K, T> = NoVecSystem<K, GenericSender<K>, T>;
+
+pub type GenSystem<K, L, T> = StorageSystem<IdVec<K>, GenerationStorage<GenericPromise<T>>, L, T>;
+pub type GenLoader<K, T> = GenSystem<K, GenericSender<K>, T>;
+
+pub trait Convert<T> {
+    type Error;
+    fn convert(self) -> Result<T, Self::Error>;
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum LoadStatus {
+    Loaded,
+    Loading,
+    StartedLoading,
+    InvalidKeyIdx,
+}
 
 pub trait Loader {
     type Key;
     type Item;
+    type Meta;
 
-    fn load(&self, key: Self::Key, into: OneTimeLock<Self::Item>) -> bool;
+    fn load(&self, key: Self::Key, into: PromiseSender<Self::Item, Self::Meta>) -> bool;
 }
 
-impl<K, T> Loader for Sender<(K, OneTimeLock<T>)> {
-    type Key = K;
-    type Item = T;
+#[derive(Debug, Copy, Clone)]
+pub struct InvalidType;
 
-    fn load(&self, key: K, into: OneTimeLock<T>) -> bool {
+impl Display for InvalidType {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Invalid generic item conversion")
+    }
+}
+
+impl Error for InvalidType {}
+
+#[derive(Deref, DerefMut)]
+pub struct GenericItem(pub Box<dyn Any + Send + Sync>);
+
+impl GenericItem {
+    pub fn new<T: 'static + Send + Sync>(item: T) -> Self {
+        Self(Box::new(item) as Box<dyn Any + Send + Sync>)
+    }
+}
+
+impl<T: 'static> Convert<T> for GenericItem {
+    type Error = InvalidType;
+
+    fn convert(self) -> Result<T, Self::Error> {
+        let value = self.0 as Box<dyn Any>;
+        match value.downcast::<T>() {
+            Ok(value) => Ok(*value),
+            Err(_) => Err(InvalidType),
+        }
+    }
+}
+
+impl<K> Loader for GenericSender<K> {
+    type Key = K;
+    type Item = GenericItem;
+    type Meta = TypeId;
+
+    fn load(&self, key: K, into: PromiseSender<GenericItem, TypeId>) -> bool {
         match self.send((key, into)) {
             Ok(()) => true,
             Err(e) => {
@@ -44,25 +100,26 @@ impl<K, T> Loader for Sender<(K, OneTimeLock<T>)> {
 
 pub struct StorageSystem<K, S, L, T>
 where
-    S: ExpandableStorage<Item = PromisedValue<T>>,
+    S: ExpandableStorage<Item = Promise<T, L::Item>>,
     K: UnorderedStorage,
     K::Item: Hash + Eq,
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
-    L: Loader<Key = K::Item, Item = T>,
+    L: Loader<Key = K::Item>,
 {
-    storage: MappedStorage<K, S>,
+    pub storage: MappedStorage<K, S>,
     loader: L,
 }
 
 impl<K, S, L, T> StorageSystem<K, S, L, T>
 where
-    S: ExpandableStorage<Item = PromisedValue<T>>,
+    T: 'static,
+    S: ExpandableStorage<Item = Promise<T, L::Item>>,
     K: UnorderedStorage,
     K::Item: Hash + Eq,
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
-    L: Loader<Key = K::Item, Item = T>,
+    L: Loader<Key = K::Item, Meta = TypeId>,
 {
     pub fn new() -> Self
     where
@@ -76,7 +133,7 @@ where
         }
     }
 
-    pub fn new_with_loader(loader: L) -> Self 
+    pub fn new_with_loader(loader: L) -> Self
     where
         S: Default,
         K: Default,
@@ -87,38 +144,50 @@ where
         }
     }
 
-    pub fn get<Q, I>(&self, ki: &KeyIdx<Q, I>) -> Option<&T>
-    where
-        K::Item: Borrow<Q>,
-        I: Borrow<S::Index>,
-        Q: Hash + Eq + Into<K::Item>,
-    {
+    pub fn get(&self, ki: &KeyIdx<K::Item, S::Index>) -> Option<&T> {
         match self.storage.get(ki) {
             Some(value) => value.get(),
             _ => None,
         }
     }
 
-    // Returns if loaded / loading
-    pub fn load<Q, I>(&mut self, ki: &mut KeyIdx<Q, I>) -> bool
+    pub fn load(&mut self, ki: &mut KeyIdx<K::Item, S::Index>) -> LoadStatus
     where
-        K::Item: Clone + Borrow<Q>,
-        S::Index: Borrow<I> + Into<I> + Clone,
-        Q: Hash + Eq + Into<K::Item> + Clone,
-        I: Borrow<S::Index>,
+        K::Item: Clone
     {
-        let to_return = self.storage.contains(ki);
-        let (promise, lock) = PromisedValue::new_loading();
+        if self.storage.contains(&*ki) {
+            match self.storage.get(ki).unwrap() {
+                Promise::Owned(_) => return LoadStatus::Loaded,
+                Promise::Waiting(_) => return LoadStatus::Loading,
+            }
+        }
 
+        let (promise, lock) = Promise::new_waiting(TypeId::of::<T>());
         self.storage.insert_replace_idx(ki, promise);
-        self.loader.load(ki.key().unwrap().clone().into(), lock);
+        self.loader.load(ki.key.clone(), lock);
 
-        to_return
+        LoadStatus::Loading
     }
 
-    pub fn update_loaded(&mut self) {
+    pub fn update_loaded(&mut self) -> Result<(), PromiseError>
+    where
+        L::Item: Convert<T>,
+    {
         for value in self.storage.values_mut() {
-            value.update_get();
+            value.update()?;
         }
+
+        Ok(())
+    }
+
+    pub fn update_block_loading(&mut self) -> Result<(), PromiseError>
+    where
+        L::Item: Convert<T>,
+    {
+        for value in self.storage.values_mut() {
+            value.update_blocking()?;
+        }
+
+        Ok(())
     }
 }

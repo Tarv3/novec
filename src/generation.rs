@@ -1,6 +1,6 @@
 use crate::{*, idvec::IdVecIndex};
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct StorageId {
     pub index: usize,
     pub generation: u64,

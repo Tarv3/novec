@@ -1,145 +1,143 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex, Weak,
+use cbc::{bounded, Receiver, Sender};
+use std::{
+    error::Error,
+    fmt::{self, Display},
 };
+use super::Convert;
 
-#[derive(Debug)]
-pub struct OneTimeLock<T> {
-    written: bool,
-    ready: Arc<AtomicBool>,
-    data: Weak<Mutex<Option<T>>>,
+#[derive(Debug, Clone, Copy)]
+pub enum PromiseError {
+    Disconnected,
+    ConvertFailed,
 }
 
-impl<T> OneTimeLock<T> {
-    pub fn write(&mut self, value: T) -> bool {
-        if self.ready.load(Ordering::Relaxed) {
-            return false;
+impl Display for PromiseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Disconnected => write!(f, "Promise receiver disconnected"),
+            Self::ConvertFailed => write!(f, "Failed to convert loaded data to owned"),
         }
+    }
+}
 
-        let data = match self.data.upgrade() {
-            Some(data) => data,
-            None => return false,
+impl Error for PromiseError {}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpdateStatus {
+    AlreadyOwned,
+    Updated,
+    Waiting
+}
+
+#[derive(Debug)]
+pub struct PromiseSender<T, M> {
+    sender: Sender<T>,
+    pub meta_data: M,
+}
+
+impl<T, M> PromiseSender<T, M> {
+    pub fn send(&self, value: T) -> Result<(), cbc::TrySendError<T>> {
+        self.sender.try_send(value)
+    }
+}
+
+#[derive(Debug)]
+pub enum Promise<T, U> {
+    Owned(T),
+    Waiting(Receiver<U>),
+}
+
+impl<T, U> Promise<T, U> {
+    pub fn new_waiting<M>(meta: M) -> (Self, PromiseSender<U, M>) {
+        let (sender, receiver) = bounded(1);
+        let promise_sender = PromiseSender {
+            sender,
+            meta_data: meta,
         };
-
-        *data.lock().unwrap() = Some(value);
-        self.written = true;
-        true
-    }
-
-    pub fn unlock(&self) -> bool {
-        if !self.written {
-            return false;
-        }
-
-        self.ready.store(true, Ordering::Relaxed);
-        true
-    }
-}
-
-#[derive(Debug)]
-pub struct OneTimeMutex<T> {
-    locked: bool,
-    ready: Arc<AtomicBool>,
-    data: Arc<Mutex<Option<T>>>,
-}
-
-impl<T> OneTimeMutex<T> {
-    pub fn new() -> Self {
-        Self {
-            locked: false,
-            ready: Arc::new(AtomicBool::new(false)),
-            data: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    pub fn lock(&mut self) -> Option<OneTimeLock<T>> {
-        if self.locked {
-            return None;
-        }
-        
-        self.locked = true;
-        let data = Arc::downgrade(&self.data);
-        let ready = self.ready.clone();
-
-        Some(OneTimeLock {
-            ready,
-            data,
-            written: false,
-        })
-    }
-
-    pub fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Relaxed)
-    }
-
-    pub fn into_ready(mut self) -> Result<T, OneTimeMutex<T>> {
-        if self.is_ready() {
-            let value = match Arc::try_unwrap(self.data) {
-                Ok(value) => value.into_inner().unwrap().unwrap(),
-                Err(data) => {
-                    self.data = data;
-                    return Err(self);
-                }
-            };
-
-            return Ok(value);
-        }
-
-        Err(self)
-    }
-}
-
-pub enum PromisedValue<T> {
-    Loaded(T),
-    Loading(OneTimeMutex<T>),
-}
-
-impl<T> PromisedValue<T> {
-    pub fn new_loading() -> (Self, OneTimeLock<T>) {
-        let mut value = OneTimeMutex::new();
-        let lock = value.lock().unwrap();
-        (Self::Loading(value), lock)
-    }
-
-    pub fn unwrap_loaded(self) -> T {
-        match self {
-            PromisedValue::Loaded(value) => value,
-            _ => panic!("Tried to unwrap not loaded value as loaded"),
-        }
-    }
-
-    pub fn unwrap_loading(self) -> OneTimeMutex<T> {
-        match self {
-            PromisedValue::Loading(value) => value,
-            _ => panic!("Tried to unwrap loaded value as loading"),
-        }
+        (Self::Waiting(receiver), promise_sender)
     }
 
     pub fn get(&self) -> Option<&T> {
         match self {
-            Self::Loaded(value) => Some(value),
-            _ => None
+            Self::Owned(value) => Some(value),
+            _ => None,
         }
     }
 
-    pub fn update_get(&mut self) -> Option<&T> {
-        if let PromisedValue::Loaded(value) = self {
-            return Some(value);
+    pub fn unwrap_waiting(self) -> Receiver<U> {
+        match self {
+            Self::Waiting(rec) => rec,
+            _ => panic!("Tried to unwrap owned value"),
+        }
+    }
+
+    pub fn unwrap(self) -> T {
+        match self {
+            Self::Owned(value) => value,
+            _ => panic!("Tried to unwrap unfulfilled promise"),
+        }
+    }
+
+    pub fn unwrap_ref(&self) -> &T {
+        match self {
+            Self::Owned(value) => value,
+            _ => panic!("Tried to unwrap unfulfilled promise"),
+        }
+    }
+
+    pub fn update(&mut self) -> Result<UpdateStatus, PromiseError>
+    where
+        U: Convert<T>
+    {
+        match self {
+            Self::Owned(_) => return Ok(UpdateStatus::AlreadyOwned),
+            _ => (),
         }
 
-        take_mut::take(self, |value| {
-            let one_time = value.unwrap_loading();
+        let mut result = Ok(UpdateStatus::Waiting);
 
-            match one_time.into_ready() {
-                Ok(value) => PromisedValue::Loaded(value),
-                Err(one_time) => PromisedValue::Loading(one_time),
+        take_mut::take(self, |value| {
+            let receiver = value.unwrap_waiting();
+
+            match receiver.try_recv() {
+                Ok(value) => match value.convert() {
+                    Ok(owned) => {
+                        result = Ok(UpdateStatus::Updated);
+                        return Promise::Owned(owned);
+                    }
+                    Err(_) => {
+                        result = Err(PromiseError::ConvertFailed);
+                        return Promise::Waiting(receiver);
+                    }
+                },
+                Err(cbc::TryRecvError::Disconnected) => {
+                    result = Err(PromiseError::Disconnected);
+                    return Promise::Waiting(receiver);
+                }
+                _ => return Promise::Waiting(receiver),
             }
         });
 
-        if let PromisedValue::Loaded(value) = self {
-            return Some(value);
-        }
+        result
+    }
 
-        None
+    pub fn update_blocking(&mut self) -> Result<UpdateStatus, PromiseError>
+    where
+        U: Convert<T>
+    {
+        let value = match self {
+            Self::Owned(_) => return Ok(UpdateStatus::AlreadyOwned),
+            Self::Waiting(receiver) => receiver
+                .recv()
+                .or_else(|_| Err(PromiseError::Disconnected))?,
+        };
+
+        let owned = match value.convert() {
+            Ok(success) => success,
+            Err(_) => return Err(PromiseError::ConvertFailed),
+        };
+
+        *self = Self::Owned(owned);
+        Ok(UpdateStatus::Updated)
     }
 }

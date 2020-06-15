@@ -10,6 +10,7 @@ impl From<usize> for IdVecIndex {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct IdVec<T> {
     container: Vec<Option<T>>
 }

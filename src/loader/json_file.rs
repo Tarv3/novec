@@ -1,12 +1,13 @@
 use super::*;
-use cbc::*;
 use serde::de::DeserializeOwned;
 use std::{
+    any::TypeId,
     collections::HashMap,
     error::Error,
     fmt::{self, Display, Formatter},
+    fs::File,
     hash::Hash,
-    io::BufRead,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
 
@@ -63,33 +64,36 @@ fn load_mappings_from_file<K: DeserializeOwned>(
     Ok((parent, mappings))
 }
 
-pub struct JsonFile<K: Hash, T> {
+pub struct JsonFile<K: Hash> {
+    parent: PathBuf,
     mapping: HashMap<K, PathBuf>,
-    receiver: Receiver<(K, OneTimeLock<T>)>,
+    receiver: GenericReceiver<K>,
 }
 
-impl<K: Hash + Clone + Eq, T> JsonFile<K, T> {
-    pub fn new(receiver: Receiver<(K, OneTimeLock<T>)>) -> Self {
+impl<K: Hash + Clone + Eq> JsonFile<K> {
+    pub fn new(receiver: GenericReceiver<K>) -> Self {
         Self {
+            parent: PathBuf::new(),
             mapping: HashMap::new(),
             receiver,
         }
     }
 
     pub fn from_file(
-        receiver: Receiver<(K, OneTimeLock<T>)>,
+        receiver: GenericReceiver<K>,
         path: impl AsRef<Path>,
     ) -> Result<Self, Box<dyn Error>>
     where
         K: DeserializeOwned,
     {
-        let (_, mappings) = load_mappings_from_file(path)?;
+        let (parent, mappings) = load_mappings_from_file(path)?;
 
-        Ok(Self::from_mappings(receiver, mappings.into_iter()))
+        Ok(Self::from_mappings(receiver, parent, mappings.into_iter()))
     }
 
     pub fn from_mappings(
-        receiver: Receiver<(K, OneTimeLock<T>)>,
+        receiver: GenericReceiver<K>,
+        parent: PathBuf,
         mappings: impl Iterator<Item = (K, PathBuf)>,
     ) -> Self {
         let mut mapping = HashMap::new();
@@ -98,18 +102,21 @@ impl<K: Hash + Clone + Eq, T> JsonFile<K, T> {
             mapping.insert(key, path);
         }
 
-        Self { mapping, receiver }
+        Self {
+            parent,
+            mapping,
+            receiver,
+        }
     }
 
-    pub fn receive<U>(&self, f: impl Fn(U) -> T) 
-    where 
-        U: DeserializeOwned,
-    {
-        for (key, mut into) in self.receiver.iter() {
-            let path = match self.mapping.get(&key) {
-                Some(value) => value.as_path(),
-                None => continue
-            };
+    pub fn receive<E: Error>(&self, f: impl Fn(BufReader<File>, TypeId) -> Result<GenericItem, E>) {
+        for (key, into) in self.receiver.iter() {
+            let mut path = self.parent.clone();
+
+            match self.mapping.get(&key) {
+                Some(value) => path.push(value.as_path()),
+                None => continue,
+            }
 
             let file = match std::fs::File::open(path) {
                 Ok(file) => file,
@@ -120,16 +127,15 @@ impl<K: Hash + Clone + Eq, T> JsonFile<K, T> {
             };
 
             let reader = std::io::BufReader::new(file);
-            let loaded = match serde_json::from_reader(reader) {
-                Ok(value) => f(value),
+
+            let item = match f(reader, into.meta_data) {
+                Ok(item) => item, 
                 Err(e) => {
-                    dbg!(e);
-                    continue;
+                    println!("Load error: {}", e);
+                    continue
                 }
             };
-
-            into.write(loaded);
-            into.unlock();
+            into.send(item).expect("Failed to send loaded value");
         }
     }
 }

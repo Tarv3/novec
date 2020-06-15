@@ -129,95 +129,49 @@ where
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
 {
-    pub fn entry<Q, I>(&mut self, ki: KeyIdx<Q, I>) -> Option<Entry<K, S>>
-    where
-        K::Item: Borrow<Q>,
-        I: Borrow<S::Index>,
-        Q: Hash + Eq + Into<K::Item>,
-    {
-        match ki {
-            KeyIdx::Index(index) | KeyIdx::Both { index, .. } => {
-                let key_idx: K::Index = index.borrow().clone().into();
-                let value = self.storage.get_mut(index.borrow())?;
-                let key = self.keys.get(&key_idx)?;
-                let index = self.indices.get((&*key).borrow()).unwrap();
-
-                Some(Entry::Occupied(Occupied { key, index, value }))
-            }
-            KeyIdx::Key(key) => {
-                let self_ptr = self as *mut Self;
-
-                if let Some(index) = self.indices.get(&key) {
-                    let value = self.storage.get_mut(index)?;
-                    let key = self.keys.get(&index.clone().into())?;
-                    Some(Entry::Occupied(Occupied { key, index, value }))
-                } else {
-                    // This is to avoid the borrow checker and is valid because nothing else will
-                    // have a reference to self at this point in time
-                    unsafe {
-                        Some(Entry::Vacant(VacantEntry {
-                            key: key.into(),
-                            storage: &mut *self_ptr,
-                        }))
-                    }
-                }
-            }
+    pub fn contains(&self, ki: &KeyIdx<K::Item, S::Index>) -> bool {
+        if let Some(value) = ki.index_ref() {
+            return self.storage.get(value).is_some();
         }
+
+        self.indices.contains_key(&ki.key)
     }
 
-    pub fn contains<Q, I>(&self, ki: &KeyIdx<Q, I>) -> bool
-    where
-        K::Item: Borrow<Q>,
-        I: Borrow<S::Index>,
-        Q: Hash + Eq,
-    {
-        self.get(ki).is_some()
-    }
-
-    pub fn get<Q, I>(&self, ki: &KeyIdx<Q, I>) -> Option<&S::Item>
-    where
-        K::Item: Borrow<Q>,
-        I: Borrow<S::Index>,
-        Q: Hash + Eq,
-    {
-        match ki {
-            KeyIdx::Index(index) | KeyIdx::Both { index, .. } => self.storage.get(index.borrow()),
-            KeyIdx::Key(key) => self
-                .indices
-                .get(key)
-                .map(|index| self.storage.get(index))
-                .unwrap_or(None),
+    pub fn get(&self, ki: &KeyIdx<K::Item, S::Index>) -> Option<&S::Item> {
+        if let Some(value) = ki.index_ref() {
+            return self.storage.get(value);
         }
+
+        self.indices
+            .get(&ki.key)
+            .map(|index| self.storage.get(index))
+            .flatten()
     }
 
-    pub fn get_mut<Q, I>(&mut self, ki: &KeyIdx<Q, I>) -> Option<&mut S::Item>
-    where
-        K::Item: Borrow<Q>,
-        I: Borrow<S::Index>,
-        Q: Hash + Eq,
-    {
-        match ki {
-            KeyIdx::Index(index) => self.storage.get_mut(index.borrow()),
-            KeyIdx::Key(key) => match self.indices.get(key) {
-                Some(index) => self.storage.get_mut(index),
-                None => None,
-            },
-            KeyIdx::Both { index, .. } => self.storage.get_mut(index.borrow()),
+    pub fn get_mut(&mut self, ki: &KeyIdx<K::Item, S::Index>) -> Option<&mut S::Item> {
+        if let Some(index) = ki.index_ref() {
+            return self.storage.get_mut(index);
         }
+
+        if let Some(index) = self.indices.get(&ki.key) {
+            return self.storage.get_mut(index);
+        }
+
+        None
     }
 
-    pub fn get_by_index<I: Borrow<S::Index>>(&self, index: &I) -> Option<&S::Item> {
-        self.storage.get(index.borrow())
+    pub fn get_by_index(&self, index: &S::Index) -> Option<&S::Item> {
+        self.storage.get(index)
     }
 
-    pub fn get_by_index_mut<I: Borrow<S::Index>>(&mut self, index: &I) -> Option<&mut S::Item> {
-        self.storage.get_mut(index.borrow())
+    pub fn get_by_index_mut(&mut self, index: &S::Index) -> Option<&mut S::Item> {
+        self.storage.get_mut(index)
     }
 
     pub fn get_by_key<Q>(&self, key: &Q) -> Option<&S::Item>
     where
         K::Item: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         match self.indices.get(key) {
             Some(index) => self.storage.get(index),
@@ -228,7 +182,7 @@ where
     pub fn get_by_key_mut<Q>(&mut self, key: &Q) -> Option<&mut S::Item>
     where
         K::Item: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         match self.indices.get(key) {
             Some(index) => self.storage.get_mut(index),
@@ -239,112 +193,59 @@ where
     pub fn get_index<Q>(&self, key: &Q) -> Option<&S::Index>
     where
         K::Item: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.indices.get(key)
     }
 
-    pub fn get_key<I>(&self, index: &I) -> Option<&K::Item>
-    where
-        I: Borrow<S::Index>,
-    {
-        self.keys.get(&index.borrow().clone().into())
+    pub fn get_key(&self, index: &S::Index) -> Option<&K::Item> {
+        self.keys.get(&index.clone().into())
     }
 
-    pub fn fill_key_idx<Q, I>(&self, key_idx: &mut KeyIdx<Q, I>) -> bool
-    where
-        K::Item: Borrow<Q> + Into<Q> + Clone,
-        S::Index: Into<I> + Clone,
-        Q: Hash + Eq,
-        I: Borrow<S::Index>,
-    {
-        let mut result = true;
-
-        take_mut::take(key_idx, |ki| match ki {
-            KeyIdx::Key(key) => match self.get_index(&key) {
-                Some(index) => KeyIdx::Both {
-                    key,
-                    index: index.clone().into(),
-                },
-                None => {
-                    result = false;
-                    KeyIdx::Key(key)
-                }
-            },
-            KeyIdx::Index(index) => match self.get_key(&index) {
-                Some(key) => KeyIdx::Both {
-                    key: key.clone().into(),
-                    index,
-                },
-                None => {
-                    result = false;
-                    KeyIdx::Index(index)
-                }
-            },
-            KeyIdx::Both { key, index } => KeyIdx::Both { key, index },
-        });
-
-        result
+    pub fn fill_key_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
+        match self.get_index(&ki.key) {
+            Some(value) => {
+                ki.index = Some(*value);
+                return true;
+            }
+            None => return false,
+        }
     }
 
-    pub fn fill_key_idx_get<Q, I>(&self, key_idx: &mut KeyIdx<Q, I>) -> Option<&S::Item>
-    where
-        K::Item: Borrow<Q> + Into<Q> + Clone,
-        S::Index: Borrow<I> + Into<I> + Clone,
-        Q: Hash + Eq,
-        I: Borrow<S::Index>,
-    {
-        if !self.fill_key_idx(key_idx) {
+    pub fn fill_key_idx_get(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> Option<&S::Item> {
+        if !self.fill_key_idx(ki) {
             return None;
         }
 
-        self.get(key_idx)
+        self.get_by_index(ki.index_ref().unwrap())
     }
 
-    pub fn fill_key_idx_get_mut<Q, I>(&mut self, key_idx: &mut KeyIdx<Q, I>) -> Option<&mut S::Item>
-    where
-        K::Item: Borrow<Q> + Into<Q> + Clone,
-        S::Index: Borrow<I> + Into<I> + Clone,
-        Q: Hash + Eq,
-        I: Borrow<S::Index>,
-    {
-        if !self.fill_key_idx(key_idx) {
-            return None;
-        }
-
-        self.get_mut(key_idx)
-    }
-
-    pub fn insert_replace_idx<Q, I>(
+    pub fn fill_key_idx_get_mut(
         &mut self,
-        key_idx: &mut KeyIdx<Q, I>,
+        ki: &mut KeyIdx<K::Item, S::Index>,
+    ) -> Option<&mut S::Item> {
+        if !self.fill_key_idx(ki) {
+            return None;
+        }
+
+        self.get_by_index_mut(ki.index_ref().unwrap())
+    }
+
+    pub fn insert_replace_idx(
+        &mut self,
+        ki: &mut KeyIdx<K::Item, S::Index>,
         value: S::Item,
     ) -> Option<S::Item>
     where
         K::Item: Clone,
-        S::Index: Borrow<I> + Into<I> + Clone,
-        Q: Hash + Eq + Into<K::Item> + Clone,
-        I: Borrow<S::Index>,
     {
-        if key_idx.is_only_index() {
-            return None;
-        }
+        let (index, removed) = self.insert(ki.key.clone(), value);
+        ki.index = Some(index);
 
-        let mut swapped = None;
-
-        take_mut::take(key_idx, |ki| {
-            let key = ki.into_key().unwrap();
-
-            let (index, removed) = self.insert(key.clone().into(), value);
-            swapped = removed;
-
-            KeyIdx::Both { key, index: index.clone().into() }
-        });
-        
-        swapped
+        removed
     }
 
-    pub fn insert(&mut self, key: K::Item, value: S::Item) -> (&S::Index, Option<S::Item>)
+    pub fn insert(&mut self, key: K::Item, value: S::Item) -> (S::Index, Option<S::Item>)
     where
         K::Item: Clone,
     {
@@ -355,9 +256,9 @@ where
             HashEntry::Occupied(mut occupied) => {
                 let previous = occupied.insert(index);
                 let removed = self.storage.remove(&previous);
-                (occupied.into_mut(), removed)
+                (*occupied.into_mut(), removed)
             }
-            HashEntry::Vacant(vacant) => (vacant.insert(index), None),
+            HashEntry::Vacant(vacant) => (*vacant.insert(index), None),
         }
     }
 
@@ -387,25 +288,25 @@ where
         }
     }
 
-    pub fn remove<Q, I>(&mut self, ki: &KeyIdx<Q, I>) -> Option<S::Item>
-    where
-        K::Item: Borrow<Q>,
-        I: Borrow<S::Index>,
-        Q: Hash + Eq,
-    {
-        match ki {
-            KeyIdx::Index(index) | KeyIdx::Both { index, .. } => {
-                self.keys
-                    .remove(&index.borrow().clone().into())
-                    .map(|key| self.indices.remove(key.borrow()));
-                self.storage.remove(index.borrow())
-            }
-            KeyIdx::Key(key) => self
-                .indices
-                .remove(key)
-                .map(|idx| self.storage.remove(&idx))
-                .unwrap_or(None),
+    pub fn remove_with_index(&mut self, index: &S::Index) -> Option<S::Item> {
+        self.keys
+            .remove(&(*index).into())
+            .map(|key| self.indices.remove(&key));
+        return self.storage.remove(index);
+    }
+
+    pub fn remove(&mut self, ki: &KeyIdx<K::Item, S::Index>) -> Option<S::Item> {
+        if let Some(&index) = ki.index_ref() {
+            self.keys
+                .remove(&index.into())
+                .map(|key| self.indices.remove(key.borrow()));
+            return self.storage.remove(&index);
         }
+
+        self.indices
+            .remove(&ki.key)
+            .map(|idx| self.storage.remove(&idx))
+            .flatten()
     }
 
     // Iterates in same order as hash map
@@ -414,6 +315,25 @@ where
     ) -> impl Iterator<Item = (&'a K::Item, &'a S::Index, &'a S::Item)> + 'a {
         self.indices.iter().map(move |(key, idx)| {
             let value = self.storage.get(idx).unwrap();
+            (key, idx, value)
+        })
+    }
+
+    pub fn iter_mut<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = (&'a K::Item, &'a S::Index, &'a mut S::Item)> + 'a {
+        let indices = &self.indices;
+        let values = &mut self.storage;
+
+        indices.iter().map(move |(key, idx)| {
+            let value = values.get_mut(idx).unwrap();
+
+            // TODO: Remove this unsafe code.
+            // Not sure if this is needed or not
+            let value = unsafe {
+                let ptr = value as *mut S::Item;
+                &mut *ptr
+            };
             (key, idx, value)
         })
     }
@@ -432,8 +352,37 @@ where
             let value = storage.get_mut(idx).unwrap();
             let ptr = value as *mut S::Item;
 
+            // TODO: Remove this unsafe code.
             // why rust
             unsafe { &mut *ptr }
+        })
+    }
+
+    pub fn indices<'a>(&'a self) -> impl Iterator<Item = (&'a K::Item, &'a S::Index)> + 'a {
+        self.indices.iter()
+    }
+
+    pub fn retain(&mut self, mut f: impl FnMut(&S::Index, &S::Item) -> bool) {
+        let indices = &mut self.indices;
+        let keys = &mut self.keys;
+        let values = &mut self.storage;
+
+        indices.retain(|_, value| {
+            let item = match values.get(value) {
+                Some(item) => item,
+                None => {
+                    keys.remove(&(*value).into());
+                    return false;
+                }
+            };
+
+            if !f(value, item) {
+                keys.remove(&(*value).into());
+                values.remove(value);
+                return false;
+            }
+
+            true
         })
     }
 }

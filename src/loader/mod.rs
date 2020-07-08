@@ -1,5 +1,4 @@
-#[cfg(feature = "json")]
-pub mod json_file;
+pub mod file_mapper;
 pub mod manager;
 pub mod promised;
 
@@ -107,6 +106,7 @@ where
     L: Loader<Key = K::Item>,
 {
     pub storage: MappedStorage<K, S>,
+    load_errors: Vec<(K::Item, S::Index, PromiseError)>,
     loader: L,
 }
 
@@ -115,7 +115,7 @@ where
     T: 'static,
     S: ExpandableStorage<Item = Promise<T, L::Item>>,
     K: UnorderedStorage,
-    K::Item: Hash + Eq,
+    K::Item: Hash + Eq + Clone,
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
     L: Loader<Key = K::Item, Meta = TypeId>,
@@ -128,6 +128,7 @@ where
     {
         Self {
             storage: MappedStorage::new(),
+            load_errors: vec![],
             loader: L::default(),
         }
     }
@@ -139,6 +140,7 @@ where
     {
         Self {
             storage: MappedStorage::new(),
+            load_errors: vec![],
             loader,
         }
     }
@@ -150,15 +152,40 @@ where
         }
     }
 
-    pub fn load(&mut self, ki: &mut KeyIdx<K::Item, S::Index>) -> LoadStatus
-    where
-        K::Item: Clone,
-    {
-        if self.storage.contains(&*ki) {
-            match self.storage.get(ki).unwrap() {
-                Promise::Owned(_) => return LoadStatus::Loaded,
-                Promise::Waiting(_) => return LoadStatus::Loading,
-            }
+    pub fn get_by_index(&self, idx: &S::Index) -> Option<&T> {
+        match self.storage.get_by_index(idx) {
+            Some(value) => value.get(),
+            _ => None,
+        }
+    }
+
+    pub fn set_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
+        self.storage.set_idx(ki)
+    }
+
+    pub fn set_idx_get_status(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> Option<LoadStatus> {
+        if !self.storage.set_idx(ki) {
+            return None;
+        }
+
+        match self.storage.get(ki).unwrap() {
+            Promise::Owned(_) => Some(LoadStatus::Loaded),
+            Promise::Waiting(_) => Some(LoadStatus::Loading),
+        }
+    }
+
+    pub fn get_status(&self, ki: &KeyIdx<K::Item, S::Index>) -> Option<LoadStatus> {
+        self.storage.get(ki).map(|value| match value {
+            Promise::Owned(_) => LoadStatus::Loaded,
+            Promise::Waiting(_) => LoadStatus::Loading,
+        })
+    }
+
+    pub fn load(&mut self, ki: &mut KeyIdx<K::Item, S::Index>) -> LoadStatus {
+        match self.storage.set_idx_get(ki) {
+            Some(Promise::Owned(_)) => return LoadStatus::Loaded,
+            Some(Promise::Waiting(_)) => return LoadStatus::Loading,
+            _ => ()
         }
 
         let (promise, lock) = Promise::new_waiting(TypeId::of::<T>());
@@ -168,25 +195,73 @@ where
         LoadStatus::Loading
     }
 
-    pub fn update_loaded(&mut self) -> Result<(), PromiseError>
+    pub fn update_loaded(&mut self)
     where
         L::Item: Convert<T>,
     {
-        for value in self.storage.values_mut() {
-            value.update()?;
+        for (key, idx, value) in self.storage.iter_mut() {
+            if let Err(e) = value.update() {
+                self.load_errors.push((key.clone(), *idx, e))
+            }
         }
-
-        Ok(())
     }
 
-    pub fn update_block_loading(&mut self) -> Result<(), PromiseError>
+    pub fn update_loaded_blocking(&mut self)
     where
         L::Item: Convert<T>,
     {
-        for value in self.storage.values_mut() {
-            value.update_blocking()?;
+        for (key, idx, value) in self.storage.iter_mut() {
+            if let Err(e) = value.update_blocking() {
+                self.load_errors.push((key.clone(), *idx, e))
+            }
+        }
+    }
+
+    // Calls f with each item that is successfully loaded
+    pub fn on_update_loaded(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
+    where
+        L::Item: Convert<T>,
+    {
+        for (key, idx, value) in self.storage.iter_mut() {
+            match value.update() {
+                Ok(UpdateStatus::Updated) => f(key, idx, value.get().unwrap()),
+                Err(e) => self.load_errors.push((key.clone(), *idx, e)),
+                _ => (),
+            }
+        }
+    }
+
+    pub fn on_update_loaded_blocking(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
+    where
+        L::Item: Convert<T>,
+    {
+        for (key, idx, value) in self.storage.iter_mut() {
+            match value.update_blocking() {
+                Ok(UpdateStatus::Updated) => f(key, idx, value.get().unwrap()),
+                Err(e) => self.load_errors.push((key.clone(), *idx, e)),
+                _ => (),
+            }
+        }
+    }
+
+    pub fn were_errors(&self) -> bool {
+        !self.load_errors.is_empty()
+    }
+
+    pub fn remove_failed<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError)> + 'a {
+        for (_, idx, _) in self.load_errors.iter() {
+            self.storage.remove_with_index(idx);
         }
 
-        Ok(())
+        self.load_errors.drain(..)
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &'_ T> + '_ {
+        self.storage
+            .iter()
+            .filter(|(_, _, promise)| promise.is_owned())
+            .map(|(_, _, promise)| promise.unwrap_ref())
     }
 }

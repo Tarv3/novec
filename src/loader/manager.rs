@@ -61,7 +61,7 @@ where
     S: ExpandableStorage<Item = Promise<T, L::Item>>,
     S::Index: Into<K::Index> + Copy + Hash + Eq,
     K: UnorderedStorage,
-    K::Item: Hash + Eq,
+    K::Item: Hash + Eq + Clone,
     K::Index: Copy,
     C: UnorderedStorage<Index = K::Index>,
     C::Item: Counter,
@@ -78,8 +78,37 @@ where
         }
     }
 
+    pub fn new_with_loader(loader: L, threshold: C::Item) -> Self
+    where
+        S: Default,
+        K: Default,
+        C: Default,
+    {
+        Self {
+            storage: StorageSystem::new_with_loader(loader),
+            counters: C::default(),
+            threshold,
+        }
+    }
+
     pub fn get(&self, ki: &KeyIdx<K::Item, S::Index>) -> Option<&T> {
         self.storage.get(ki)
+    }
+
+    pub fn get_by_index(&self, idx: &S::Index) -> Option<&T> {
+        self.storage.get_by_index(idx)
+    }
+
+    pub fn set_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
+        self.storage.set_idx(ki)
+    }
+
+    pub fn set_idx_get_status(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> Option<LoadStatus> {
+        self.storage.set_idx_get_status(ki)
+    }
+
+    pub fn get_status(&self, ki: &KeyIdx<K::Item, S::Index>) -> Option<LoadStatus> {
+        self.storage.get_status(ki)
     }
 
     pub fn reset_counter(&mut self, idx: S::Index) {
@@ -95,30 +124,60 @@ where
         self.storage.load(ki)
     }
 
-    pub fn update_loaded(&mut self) -> Result<(), PromiseError>
+    pub fn update_loaded(&mut self)
     where
         L::Item: Convert<T>,
     {
-        for (_, idx, value) in self.storage.storage.iter_mut() {
-            if let UpdateStatus::Updated = value.update()? {
-                self.counters.insert((*idx).into(), C::Item::zero());
-            }
-        }
+        let storage = &mut self.storage;
+        let counters = &mut self.counters;
 
-        Ok(())
+        storage.on_update_loaded(|_, idx, _| {
+            counters.insert((*idx).into(), C::Item::zero());
+        });
     }
 
-    pub fn update_loaded_blocking(&mut self) -> Result<(), PromiseError>
+    pub fn update_loaded_blocking(&mut self)
     where
         L::Item: Convert<T>,
     {
-        for (_, idx, value) in self.storage.storage.iter_mut() {
-            if let UpdateStatus::Updated = value.update_blocking()? {
-                self.counters.insert((*idx).into(), C::Item::zero());
-            }
-        }
+        let storage = &mut self.storage;
+        let counters = &mut self.counters;
 
-        Ok(())
+        storage.on_update_loaded_blocking(|_, idx, _| {
+            counters.insert((*idx).into(), C::Item::zero());
+        });
+    }
+
+    pub fn on_update_loaded(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
+    where
+        L::Item: Convert<T>,
+    {
+        let storage = &mut self.storage;
+        let counters = &mut self.counters;
+
+        storage.on_update_loaded(|key, idx, value| {
+            counters.insert((*idx).into(), C::Item::zero());
+            f(key, idx, value);
+        });
+    }
+
+    pub fn on_update_loaded_blocking(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
+    where
+        L::Item: Convert<T>,
+    {
+        let storage = &mut self.storage;
+        let counters = &mut self.counters;
+
+        storage.on_update_loaded_blocking(|key, idx, value| {
+            counters.insert((*idx).into(), C::Item::zero());
+            f(key, idx, value);
+        });
+    }
+
+    pub fn remove_failed<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError)> + 'a {
+        self.storage.remove_failed()
     }
 
     pub fn increment(&mut self, inc: &C::Item) {

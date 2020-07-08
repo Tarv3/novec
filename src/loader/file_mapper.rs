@@ -1,28 +1,34 @@
 use super::*;
-use serde::de::DeserializeOwned;
 use std::{
     any::TypeId,
     collections::HashMap,
     error::Error,
-    fmt::{self, Display, Formatter},
+    fmt::{self, Debug, Display, Formatter},
     fs::File,
     hash::Hash,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 #[derive(Copy, Clone, Debug)]
-pub struct MissingMapping;
+pub enum MappingError {
+    MissingMapping,
+    ParseError,
+}
 
-impl Display for MissingMapping {
+impl Display for MappingError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Missing file mapping for key")
+        match self {
+            MappingError::MissingMapping => write!(f, "Missing file mapping for key"),
+            MappingError::ParseError => write!(f, "Failed to parse key"),
+        }
     }
 }
 
-impl Error for MissingMapping {}
+impl Error for MappingError {}
 
-fn load_mappings_from_file<K: DeserializeOwned>(
+fn load_mappings_from_file<K: FromStr>(
     path: impl AsRef<Path>,
 ) -> Result<(PathBuf, Vec<(K, PathBuf)>), Box<dyn Error>> {
     let file = std::fs::File::open(path)?;
@@ -35,7 +41,7 @@ fn load_mappings_from_file<K: DeserializeOwned>(
             pbuf.push(parent?);
             pbuf
         }
-        None => return Err(Box::new(MissingMapping)),
+        None => return Err(Box::new(MappingError::MissingMapping)),
     };
 
     let mut mappings = vec![];
@@ -45,8 +51,11 @@ fn load_mappings_from_file<K: DeserializeOwned>(
 
         let mut split = line.split("=>");
         let key = match split.next() {
-            Some(key) => serde_json::from_str(key)?,
-            None => return Err(Box::new(MissingMapping)),
+            Some(key) => key
+                .trim()
+                .parse()
+                .or_else(|_| Err(MappingError::ParseError))?,
+            None => return Err(Box::new(MappingError::MissingMapping)),
         };
 
         let path = match split.next() {
@@ -55,7 +64,7 @@ fn load_mappings_from_file<K: DeserializeOwned>(
                 pbuf.push(path.trim());
                 pbuf
             }
-            None => return Err(Box::new(MissingMapping)),
+            None => return Err(Box::new(MappingError::MissingMapping)),
         };
 
         mappings.push((key, path));
@@ -64,13 +73,13 @@ fn load_mappings_from_file<K: DeserializeOwned>(
     Ok((parent, mappings))
 }
 
-pub struct JsonFile<K: Hash> {
+pub struct FileMapper<K: Hash> {
     parent: PathBuf,
     mapping: HashMap<K, PathBuf>,
     receiver: GenericReceiver<K>,
 }
 
-impl<K: Hash + Clone + Eq> JsonFile<K> {
+impl<K: Hash + Clone + Eq> FileMapper<K> {
     pub fn new(receiver: GenericReceiver<K>) -> Self {
         Self {
             parent: PathBuf::new(),
@@ -84,7 +93,7 @@ impl<K: Hash + Clone + Eq> JsonFile<K> {
         path: impl AsRef<Path>,
     ) -> Result<Self, Box<dyn Error>>
     where
-        K: DeserializeOwned,
+        K: FromStr,
     {
         let (parent, mappings) = load_mappings_from_file(path)?;
 
@@ -118,9 +127,10 @@ impl<K: Hash + Clone + Eq> JsonFile<K> {
                 None => continue,
             }
 
-            let file = match std::fs::File::open(path) {
+            let file = match std::fs::File::open(&path) {
                 Ok(file) => file,
                 Err(e) => {
+                    println!("Failed to open path: {:?}", &path);
                     dbg!(e);
                     continue;
                 }
@@ -129,10 +139,10 @@ impl<K: Hash + Clone + Eq> JsonFile<K> {
             let reader = std::io::BufReader::new(file);
 
             let item = match f(reader, into.meta_data) {
-                Ok(item) => item, 
+                Ok(item) => item,
                 Err(e) => {
                     println!("Load error: {}", e);
-                    continue
+                    continue;
                 }
             };
             into.send(item).expect("Failed to send loaded value");

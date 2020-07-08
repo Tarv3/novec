@@ -124,6 +124,15 @@ pub struct NoVec<T> {
     entries: Vec<Entry<T>>,
 }
 
+impl<T> Default for NoVec<T> {
+    fn default() -> Self {
+        Self {
+            next: 0,
+            entries: vec![]
+        }
+    }
+}
+
 impl<T> NoVec<T> {
     pub fn with_capacity(cap: usize) -> NoVec<T> {
         let entries = Vec::with_capacity(cap);

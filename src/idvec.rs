@@ -12,19 +12,17 @@ impl From<usize> for IdVecIndex {
 
 #[derive(Clone, Debug)]
 pub struct IdVec<T> {
-    container: Vec<Option<T>>
+    container: Vec<Option<T>>,
 }
 
 impl<T> IdVec<T> {
     pub fn new() -> Self {
-        Self {
-            container: vec![]
-        }
+        Self { container: vec![] }
     }
-    
+
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            container: Vec::with_capacity(cap)
+            container: Vec::with_capacity(cap),
         }
     }
 
@@ -33,8 +31,10 @@ impl<T> IdVec<T> {
             self.container.push(None)
         }
     }
-    
-    pub fn insert(&mut self, index: usize, value: T) -> Option<T> {
+
+    pub fn insert(&mut self, index: impl Into<IdVecIndex>, value: T) -> Option<T> {
+        let index = *index.into();
+
         if index < self.container.len() {
             return std::mem::replace(&mut self.container[index], Some(value));
         }
@@ -44,7 +44,9 @@ impl<T> IdVec<T> {
         std::mem::replace(&mut self.container[index], Some(value))
     }
 
-    pub fn remove(&mut self, index: usize) -> Option<T> {
+    pub fn remove(&mut self, index: impl Into<IdVecIndex>) -> Option<T> {
+        let index = *index.into();
+
         if index >= self.container.len() {
             return None;
         }
@@ -52,7 +54,9 @@ impl<T> IdVec<T> {
         std::mem::replace(&mut self.container[index], None)
     }
 
-    pub fn get(&self, index: usize) -> Option<&T> {
+    pub fn get(&self, index: impl Into<IdVecIndex>) -> Option<&T> {
+        let index = *index.into();
+
         if index >= self.container.len() {
             return None;
         }
@@ -67,6 +71,22 @@ impl<T> IdVec<T> {
 
         self.container[index].as_mut()
     }
+
+    pub fn iter(&'_ self) -> impl Iterator<Item = (usize, &'_ T)> + '_ {
+        self.container
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| value.is_some())
+            .map(|(idx, value)| (idx, value.as_ref().unwrap()))
+    }
+
+    pub fn iter_mut(&'_ mut self) -> impl Iterator<Item = (usize, &'_ mut T)> + '_ {
+        self.container
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, value)| value.is_some())
+            .map(|(idx, value)| (idx, value.as_mut().unwrap()))
+    }
 }
 
 impl<T> UnorderedStorage for IdVec<T> {
@@ -78,15 +98,15 @@ impl<T> UnorderedStorage for IdVec<T> {
     }
 
     fn remove(&mut self, index: &Self::Index) -> Option<Self::Item> {
-        IdVec::remove(self, **index)    
+        IdVec::remove(self, **index)
     }
 
     fn get(&self, index: &Self::Index) -> Option<&Self::Item> {
-        IdVec::get(self, **index)    
+        IdVec::get(self, **index)
     }
 
     fn get_mut(&mut self, index: &Self::Index) -> Option<&mut Self::Item> {
-        IdVec::get_mut(self, **index)    
+        IdVec::get_mut(self, **index)
     }
 }
 

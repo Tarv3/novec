@@ -85,6 +85,13 @@ impl<T, U> Promise<T, U> {
         }
     }
 
+    pub fn is_owned(&self) -> bool {
+        match self {
+            Promise::Owned(_) => true,
+            Promise::Waiting(_) => false
+        }
+    }
+
     pub fn update(&mut self) -> Result<UpdateStatus, PromiseError>
     where
         U: Convert<T>

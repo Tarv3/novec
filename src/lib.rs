@@ -12,7 +12,7 @@ mod test;
 
 // pub use crate::novec::*;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Hash)]
 pub struct KeyIdx<K, I> {
     pub key: K,
     pub index: Option<I>

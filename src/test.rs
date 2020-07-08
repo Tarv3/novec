@@ -70,9 +70,9 @@ fn loader_test() {
     uints.load(&mut ukey);
     ints.load(&mut ikey);
 
-    floats.update_block_loading().unwrap();
-    uints.update_block_loading().unwrap();
-    ints.update_block_loading().unwrap();
+    floats.update_loaded_blocking();
+    uints.update_loaded_blocking();
+    ints.update_loaded_blocking();
 
     assert!(floats.get(&fkey) == Some(&101.1_f32));
     assert!(uints.get(&ukey) == Some(&55_u32));

@@ -99,6 +99,13 @@ impl<T> GenerationStorage<T> {
             available: vec![],
         }
     }
+
+    pub fn clear(&mut self) {
+        for (i, item) in self.objects.iter_mut().filter(|item| item.is_some()).enumerate() {
+            item.remove();
+            self.available.push(i);
+        }
+    }
     
     pub fn insert(&mut self, id: StorageId, item: T) -> Option<T> {
         if id.index >= self.objects.len() {

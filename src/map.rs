@@ -202,7 +202,7 @@ where
         self.keys.get(&index.clone().into())
     }
 
-    pub fn fill_key_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
+    pub fn set_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
         match self.get_index(&ki.key) {
             Some(value) => {
                 ki.index = Some(*value);
@@ -212,19 +212,19 @@ where
         }
     }
 
-    pub fn fill_key_idx_get(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> Option<&S::Item> {
-        if !self.fill_key_idx(ki) {
+    pub fn set_idx_get(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> Option<&S::Item> {
+        if !self.set_idx(ki) {
             return None;
         }
 
         self.get_by_index(ki.index_ref().unwrap())
     }
 
-    pub fn fill_key_idx_get_mut(
+    pub fn set_idx_get_mut(
         &mut self,
         ki: &mut KeyIdx<K::Item, S::Index>,
     ) -> Option<&mut S::Item> {
-        if !self.fill_key_idx(ki) {
+        if !self.set_idx(ki) {
             return None;
         }
 

@@ -6,6 +6,7 @@ pub mod loader;
 pub mod novec;
 pub mod oom;
 pub mod map;
+// pub mod chunk;
 
 #[cfg(test)]
 mod test;
@@ -19,9 +20,9 @@ pub struct KeyIdx<K, I> {
 }
 
 impl<K, I> KeyIdx<K, I> {
-    pub fn new(key: K) -> Self {
+    pub fn new(key: impl Into<K>) -> Self {
         Self {
-            key, 
+            key: key.into(), 
             index: None
         }
     }
@@ -65,6 +66,15 @@ impl<K, I> KeyIdx<K, I> {
 
     pub fn into_index(self) -> Option<I> {
         self.index
+    }
+}
+
+impl<K: Sized, I> From<K> for KeyIdx<K, I> {
+    fn from(key: K) -> Self {
+        Self {
+            key,
+            index: None
+        }
     }
 }
 

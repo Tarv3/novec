@@ -1,3 +1,4 @@
 /target/*
 *.txt
 .vscode
+Cargo.lock

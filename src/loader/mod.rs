@@ -7,7 +7,6 @@ use crate::{
     ExpandableStorage, KeyIdx, UnorderedStorage,
 };
 use cbc::*;
-use derive_deref::*;
 use std::{
     any::{Any, TypeId},
     error::Error,
@@ -17,9 +16,9 @@ use std::{
 
 pub use promised::*;
 
-pub type GenericSender<K> = Sender<(K, PromiseSender<GenericItem, TypeId>)>;
-pub type GenericReceiver<K> = Receiver<(K, PromiseSender<GenericItem, TypeId>)>;
-pub type GenericPromise<T> = Promise<T, GenericItem>;
+pub type GenericSender<K> = Sender<(K, PromiseSender<GenericResult, TypeId>)>;
+pub type GenericReceiver<K> = Receiver<(K, PromiseSender<GenericResult, TypeId>)>;
+pub type GenericPromise<T> = Promise<T, GenericResult>;
 
 pub type NoVecSystem<K, L, T> = StorageSystem<IdVec<K>, NoVec<GenericPromise<T>>, L, T>;
 pub type NoVecLoader<K, T> = NoVecSystem<K, GenericSender<K>, T>;
@@ -37,7 +36,6 @@ pub enum LoadStatus {
     Loaded,
     Loading,
     StartedLoading,
-    InvalidKeyIdx,
 }
 
 pub trait Loader {
@@ -48,44 +46,58 @@ pub trait Loader {
     fn load(&self, key: Self::Key, into: PromiseSender<Self::Item, Self::Meta>) -> bool;
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct InvalidType;
+#[derive(Debug)]
+pub enum GenericError {
+    InvalidType,
+    Error(Box<dyn Error>),
+}
 
-impl Display for InvalidType {
+impl Display for GenericError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "Invalid generic item conversion")
+        match self {
+            GenericError::InvalidType => write!(f, "Invalid generic item conversion"),
+            GenericError::Error(e) => write!(f, "Load error: {}", e),
+        }
     }
 }
 
-impl Error for InvalidType {}
+impl Error for GenericError {}
 
-#[derive(Deref, DerefMut)]
-pub struct GenericItem(pub Box<dyn Any + Send + Sync>);
+pub enum GenericResult {
+    Ok(Box<dyn Any + Send + Sync>),
+    Err(Box<dyn Error + Send + Sync>),
+}
 
-impl GenericItem {
+impl GenericResult {
     pub fn new<T: 'static + Send + Sync>(item: T) -> Self {
-        Self(Box::new(item) as Box<dyn Any + Send + Sync>)
+        Self::Ok(Box::new(item) as Box<dyn Any + Send + Sync>)
+    }
+
+    pub fn new_error<T: 'static + Error + Send + Sync>(error: T) -> Self {
+        Self::Err(Box::new(error) as Box<dyn Error + Send + Sync>)
     }
 }
 
-impl<T: 'static> Convert<T> for GenericItem {
-    type Error = InvalidType;
+impl<T: 'static> Convert<T> for GenericResult {
+    type Error = GenericError;
 
     fn convert(self) -> Result<T, Self::Error> {
-        let value = self.0 as Box<dyn Any>;
-        match value.downcast::<T>() {
-            Ok(value) => Ok(*value),
-            Err(_) => Err(InvalidType),
+        match self {
+            GenericResult::Ok(value) => match (value as Box<dyn Any>).downcast::<T>() {
+                Ok(value) => Ok(*value),
+                Err(_) => Err(GenericError::InvalidType),
+            },
+            GenericResult::Err(e) => Err(GenericError::Error(e)),
         }
     }
 }
 
 impl<K> Loader for GenericSender<K> {
     type Key = K;
-    type Item = GenericItem;
+    type Item = GenericResult;
     type Meta = TypeId;
 
-    fn load(&self, key: K, into: PromiseSender<GenericItem, TypeId>) -> bool {
+    fn load(&self, key: K, into: PromiseSender<GenericResult, TypeId>) -> bool {
         match self.send((key, into)) {
             Ok(()) => true,
             Err(e) => {
@@ -104,9 +116,15 @@ where
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
     L: Loader<Key = K::Item>,
+    L::Item: Convert<T>,
 {
     pub storage: MappedStorage<K, S>,
-    load_errors: Vec<(K::Item, S::Index, PromiseError)>,
+    pending_load: Vec<S::Index>,
+    load_errors: Vec<(
+        K::Item,
+        S::Index,
+        PromiseError<<L::Item as Convert<T>>::Error>,
+    )>,
     loader: L,
 }
 
@@ -119,6 +137,7 @@ where
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
     L: Loader<Key = K::Item, Meta = TypeId>,
+    L::Item: Convert<T>,
 {
     pub fn new() -> Self
     where
@@ -128,6 +147,7 @@ where
     {
         Self {
             storage: MappedStorage::new(),
+            pending_load: Vec::new(),
             load_errors: vec![],
             loader: L::default(),
         }
@@ -140,6 +160,7 @@ where
     {
         Self {
             storage: MappedStorage::new(),
+            pending_load: Vec::new(),
             load_errors: vec![],
             loader,
         }
@@ -161,6 +182,14 @@ where
 
     pub fn set_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
         self.storage.set_idx(ki)
+    }
+
+    pub fn set_idx_is_loaded(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
+        if self.storage.set_idx(ki) {
+            return self.get_status(ki) == Some(LoadStatus::Loaded);
+        }
+
+        false
     }
 
     pub fn set_idx_get_status(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> Option<LoadStatus> {
@@ -185,12 +214,13 @@ where
         match self.storage.set_idx_get(ki) {
             Some(Promise::Owned(_)) => return LoadStatus::Loaded,
             Some(Promise::Waiting(_)) => return LoadStatus::Loading,
-            _ => ()
+            _ => (),
         }
 
         let (promise, lock) = Promise::new_waiting(TypeId::of::<T>());
         self.storage.insert_replace_idx(ki, promise);
         self.loader.load(ki.key.clone(), lock);
+        self.pending_load.push(ki.index.unwrap());
 
         LoadStatus::Loading
     }
@@ -199,22 +229,48 @@ where
     where
         L::Item: Convert<T>,
     {
-        for (key, idx, value) in self.storage.iter_mut() {
-            if let Err(e) = value.update() {
-                self.load_errors.push((key.clone(), *idx, e))
+        let pending = &mut self.pending_load;
+        let storage = &mut self.storage;
+        let errors = &mut self.load_errors;
+
+        pending.retain(|idx| {
+            let value = match storage.get_by_index_mut(idx) {
+                Some(value) => value,
+                None => return false,
+            };
+
+            match value.update() {
+                Ok(status) => status == UpdateStatus::Waiting,
+                Err(e) => {
+                    errors.push((storage.get_key(idx).unwrap().clone(), *idx, e));
+                    false
+                }
             }
-        }
+        });
     }
 
     pub fn update_loaded_blocking(&mut self)
     where
         L::Item: Convert<T>,
     {
-        for (key, idx, value) in self.storage.iter_mut() {
-            if let Err(e) = value.update_blocking() {
-                self.load_errors.push((key.clone(), *idx, e))
+        let pending = &mut self.pending_load;
+        let storage = &mut self.storage;
+        let errors = &mut self.load_errors;
+
+        pending.retain(|idx| {
+            let value = match storage.get_by_index_mut(idx) {
+                Some(value) => value,
+                None => return false,
+            };
+
+            match value.update_blocking() {
+                Ok(status) => status == UpdateStatus::Waiting,
+                Err(e) => {
+                    errors.push((storage.get_key(idx).unwrap().clone(), *idx, e));
+                    false
+                }
             }
-        }
+        });
     }
 
     // Calls f with each item that is successfully loaded
@@ -250,7 +306,13 @@ where
 
     pub fn remove_failed<'a>(
         &'a mut self,
-    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError)> + 'a {
+    ) -> impl Iterator<
+        Item = (
+            K::Item,
+            S::Index,
+            PromiseError<<L::Item as Convert<T>>::Error>,
+        ),
+    > + 'a {
         for (_, idx, _) in self.load_errors.iter() {
             self.storage.remove_with_index(idx);
         }

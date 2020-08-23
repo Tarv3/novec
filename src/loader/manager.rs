@@ -49,6 +49,7 @@ where
     C: UnorderedStorage<Index = K::Index>,
     C::Item: Counter,
     L: Loader<Key = K::Item>,
+    L::Item: Convert<T>,
 {
     storage: StorageSystem<K, S, L, T>,
     counters: C,
@@ -66,6 +67,7 @@ where
     C: UnorderedStorage<Index = K::Index>,
     C::Item: Counter,
     L: Loader<Key = K::Item, Meta = TypeId>,
+    L::Item: Convert<T>,
 {
     pub fn new(storage: StorageSystem<K, S, L, T>, threshold: C::Item) -> Self
     where
@@ -101,6 +103,10 @@ where
 
     pub fn set_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
         self.storage.set_idx(ki)
+    }
+
+    pub fn set_idx_is_loaded(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
+        self.storage.set_idx_is_loaded(ki)
     }
 
     pub fn set_idx_get_status(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> Option<LoadStatus> {
@@ -176,7 +182,13 @@ where
 
     pub fn remove_failed<'a>(
         &'a mut self,
-    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError)> + 'a {
+    ) -> impl Iterator<
+        Item = (
+            K::Item,
+            S::Index,
+            PromiseError<<L::Item as Convert<T>>::Error>,
+        ),
+    > + 'a {
         self.storage.remove_failed()
     }
 

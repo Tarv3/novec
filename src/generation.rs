@@ -100,6 +100,24 @@ impl<T> GenerationStorage<T> {
         }
     }
 
+    // Returns what index would be given to an object after n insertions if no deletion occur
+    pub fn nth_available(&self, n: usize) -> StorageId {
+        if n < self.available.len() {
+            let index = self.available[ self.available.len() - 1 - n];
+            let generation = self.objects[index].generation + 1;
+
+            return StorageId { index, generation}
+        }
+
+        let overflow = n - self.available.len();
+        let index = self.objects.len() + overflow;
+
+        StorageId {
+            index,
+            generation: 0,
+        }
+    }
+
     pub fn clear(&mut self) {
         for (i, item) in self.objects.iter_mut().filter(|item| item.is_some()).enumerate() {
             item.remove();

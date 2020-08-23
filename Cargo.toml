@@ -6,12 +6,5 @@ edition = "2018"
 
 [dependencies]
 take_mut = "0.2"
-# serde = { version = "1", features=["derive"], optional = true }
 derive_deref = "1"
 cbc = { version = "0.4.0", package = "crossbeam-channel" }
-
-
-[features]
-# default = ["json"]
-# json = ["serde", "serde_json"]
- 

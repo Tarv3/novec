@@ -13,15 +13,15 @@ use std::{
 
 #[derive(Copy, Clone, Debug)]
 pub enum MappingError {
-    MissingMapping,
-    ParseError,
+    MissingMapping(usize),
+    ParseError(usize),
 }
 
 impl Display for MappingError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            MappingError::MissingMapping => write!(f, "Missing file mapping for key"),
-            MappingError::ParseError => write!(f, "Failed to parse key"),
+            MappingError::MissingMapping(line) => write!(f, "Missing file mapping for key line {}", line),
+            MappingError::ParseError(line) => write!(f, "Failed to parse key line {}", line),
         }
     }
 }
@@ -41,12 +41,12 @@ fn load_mappings_from_file<K: FromStr>(
             pbuf.push(parent?);
             pbuf
         }
-        None => return Err(Box::new(MappingError::MissingMapping)),
+        None => return Err(Box::new(MappingError::MissingMapping(0))),
     };
 
     let mut mappings = vec![];
 
-    for line in lines {
+    for (i, line) in lines.enumerate() {
         let line = line?;
 
         let mut split = line.split("=>");
@@ -54,8 +54,8 @@ fn load_mappings_from_file<K: FromStr>(
             Some(key) => key
                 .trim()
                 .parse()
-                .or_else(|_| Err(MappingError::ParseError))?,
-            None => return Err(Box::new(MappingError::MissingMapping)),
+                .or_else(|_| Err(MappingError::ParseError(i)))?,
+            None => return Err(Box::new(MappingError::MissingMapping(i))),
         };
 
         let path = match split.next() {
@@ -64,7 +64,7 @@ fn load_mappings_from_file<K: FromStr>(
                 pbuf.push(path.trim());
                 pbuf
             }
-            None => return Err(Box::new(MappingError::MissingMapping)),
+            None => return Err(Box::new(MappingError::MissingMapping(i))),
         };
 
         mappings.push((key, path));
@@ -73,23 +73,38 @@ fn load_mappings_from_file<K: FromStr>(
     Ok((parent, mappings))
 }
 
+pub struct MappedObject<'a, K> {
+    pub type_id: TypeId,
+    pub key: K,
+    pub path: &'a Path,
+    pub reader: BufReader<File>,
+}
+
+pub enum MapError {
+    MissingMapping,
+    FileError(PathBuf, std::io::Error),
+}
+
 pub struct FileMapper<K: Hash> {
     parent: PathBuf,
     mapping: HashMap<K, PathBuf>,
     receiver: GenericReceiver<K>,
+    shutdown: Option<Receiver<()>>,
 }
 
 impl<K: Hash + Clone + Eq> FileMapper<K> {
-    pub fn new(receiver: GenericReceiver<K>) -> Self {
+    pub fn new(receiver: GenericReceiver<K>, shutdown: Option<Receiver<()>>) -> Self {
         Self {
             parent: PathBuf::new(),
             mapping: HashMap::new(),
             receiver,
+            shutdown,
         }
     }
 
     pub fn from_file(
         receiver: GenericReceiver<K>,
+        shutdown: Option<Receiver<()>>,
         path: impl AsRef<Path>,
     ) -> Result<Self, Box<dyn Error>>
     where
@@ -97,11 +112,17 @@ impl<K: Hash + Clone + Eq> FileMapper<K> {
     {
         let (parent, mappings) = load_mappings_from_file(path)?;
 
-        Ok(Self::from_mappings(receiver, parent, mappings.into_iter()))
+        Ok(Self::from_mappings(
+            receiver,
+            shutdown,
+            parent,
+            mappings.into_iter(),
+        ))
     }
 
     pub fn from_mappings(
         receiver: GenericReceiver<K>,
+        shutdown: Option<Receiver<()>>,
         parent: PathBuf,
         mappings: impl Iterator<Item = (K, PathBuf)>,
     ) -> Self {
@@ -115,37 +136,101 @@ impl<K: Hash + Clone + Eq> FileMapper<K> {
             parent,
             mapping,
             receiver,
+            shutdown,
         }
     }
 
-    pub fn receive<E: Error>(&self, f: impl Fn(BufReader<File>, TypeId) -> Result<GenericItem, E>) {
-        for (key, into) in self.receiver.iter() {
-            let mut path = self.parent.clone();
-
-            match self.mapping.get(&key) {
-                Some(value) => path.push(value.as_path()),
-                None => continue,
+    pub fn receive_non_blocking(
+        &self,
+        mut success: impl FnMut(MappedObject<K>) -> GenericResult,
+        mut fail: impl FnMut(K, MapError),
+    ) -> Result<(), RecvError> {
+        if let Some(r) = self.shutdown.as_ref() {
+            match r.try_recv() {
+                Ok(_) => return Ok(()),
+                Err(TryRecvError::Empty) => {}
+                Err(_) => return Err(RecvError),
             }
+        }
+
+        for (key, into) in self.receiver.try_iter() {
+            let path = match self.mapping.get(&key) {
+                Some(value) => value,
+                None => {
+                    fail(key, MapError::MissingMapping);
+                    return Ok(());
+                }
+            };
 
             let file = match std::fs::File::open(&path) {
                 Ok(file) => file,
                 Err(e) => {
-                    println!("Failed to open path: {:?}", &path);
-                    dbg!(e);
-                    continue;
+                    fail(key, MapError::FileError(path.clone(), e));
+                    return Ok(());
                 }
             };
 
             let reader = std::io::BufReader::new(file);
 
-            let item = match f(reader, into.meta_data) {
-                Ok(item) => item,
-                Err(e) => {
-                    println!("Load error: {}", e);
-                    continue;
-                }
+            let mapped = MappedObject {
+                type_id: into.meta_data,
+                key,
+                path: path.as_path(),
+                reader,
             };
-            into.send(item).expect("Failed to send loaded value");
+
+            if let Err(_) = into.send(success(mapped)) {
+                // @ErrorHandling
+            }
         }
+
+        Ok(())
+    }
+
+    pub fn receive(
+        &self,
+        mut success: impl FnMut(MappedObject<K>) -> GenericResult,
+        mut fail: impl FnMut(K, MapError),
+    ) -> Result<(), RecvError> {
+        loop {
+            select! {
+                recv(self.shutdown.as_ref().unwrap_or(&cbc::never())) -> _ => break,
+                recv(self.receiver) -> msg => match msg {
+                    Ok((key, into)) => {
+                        let path = match self.mapping.get(&key) {
+                            Some(value) => value,
+                            None => {
+                                fail(key, MapError::MissingMapping);
+                                continue;
+                            },
+                        };
+
+                        let file = match std::fs::File::open(&path) {
+                            Ok(file) => file,
+                            Err(e) => {
+                                fail(key, MapError::FileError(path.clone(), e));
+                                continue;
+                            }
+                        };
+
+                        let reader = std::io::BufReader::new(file);
+
+                        let mapped = MappedObject {
+                            type_id: into.meta_data,
+                            key,
+                            path: path.as_path(),
+                            reader,
+                        };
+
+                        if let Err(_) = into.send(success(mapped)) {
+                            // @ErrorHandling
+                        }
+                    },
+                    Err(e) => return Err(e)
+                }
+            }
+        }
+
+        Ok(())
     }
 }

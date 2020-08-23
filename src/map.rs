@@ -202,7 +202,14 @@ where
         self.keys.get(&index.clone().into())
     }
 
+    // Returns true if either ki received an index or it already had an index
     pub fn set_idx(&self, ki: &mut KeyIdx<K::Item, S::Index>) -> bool {
+        if let Some(idx) = &ki.index {
+            if self.get_by_index(idx).is_some() {
+                return  true;
+            }
+        }
+
         match self.get_index(&ki.key) {
             Some(value) => {
                 ki.index = Some(*value);

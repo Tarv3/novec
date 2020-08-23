@@ -1,32 +1,32 @@
+use super::Convert;
 use cbc::{bounded, Receiver, Sender};
 use std::{
     error::Error,
     fmt::{self, Display},
 };
-use super::Convert;
 
-#[derive(Debug, Clone, Copy)]
-pub enum PromiseError {
+#[derive(Debug)]
+pub enum PromiseError<E> {
     Disconnected,
-    ConvertFailed,
+    LoadError(E),
 }
 
-impl Display for PromiseError {
+impl<E: Error> Display for PromiseError<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Disconnected => write!(f, "Promise receiver disconnected"),
-            Self::ConvertFailed => write!(f, "Failed to convert loaded data to owned"),
+            Self::LoadError(error) => write!(f, "Failed to load: {}", error),
         }
     }
 }
 
-impl Error for PromiseError {}
+impl<E: Error> Error for PromiseError<E> {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UpdateStatus {
     AlreadyOwned,
     Updated,
-    Waiting
+    Waiting,
 }
 
 #[derive(Debug)]
@@ -88,14 +88,16 @@ impl<T, U> Promise<T, U> {
     pub fn is_owned(&self) -> bool {
         match self {
             Promise::Owned(_) => true,
-            Promise::Waiting(_) => false
+            Promise::Waiting(_) => false,
         }
     }
+}
 
-    pub fn update(&mut self) -> Result<UpdateStatus, PromiseError>
-    where
-        U: Convert<T>
-    {
+impl<T, U> Promise<T, U>
+where
+    U: Convert<T>,
+{
+    pub fn update(&mut self) -> Result<UpdateStatus, PromiseError<U::Error>> {
         match self {
             Self::Owned(_) => return Ok(UpdateStatus::AlreadyOwned),
             _ => (),
@@ -112,8 +114,8 @@ impl<T, U> Promise<T, U> {
                         result = Ok(UpdateStatus::Updated);
                         return Promise::Owned(owned);
                     }
-                    Err(_) => {
-                        result = Err(PromiseError::ConvertFailed);
+                    Err(e) => {
+                        result = Err(PromiseError::LoadError(e));
                         return Promise::Waiting(receiver);
                     }
                 },
@@ -128,9 +130,7 @@ impl<T, U> Promise<T, U> {
         result
     }
 
-    pub fn update_blocking(&mut self) -> Result<UpdateStatus, PromiseError>
-    where
-        U: Convert<T>
+    pub fn update_blocking(&mut self) -> Result<UpdateStatus, PromiseError<U::Error>>
     {
         let value = match self {
             Self::Owned(_) => return Ok(UpdateStatus::AlreadyOwned),
@@ -141,7 +141,7 @@ impl<T, U> Promise<T, U> {
 
         let owned = match value.convert() {
             Ok(success) => success,
-            Err(_) => return Err(PromiseError::ConvertFailed),
+            Err(e) => return Err(PromiseError::LoadError(e)),
         };
 
         *self = Self::Owned(owned);

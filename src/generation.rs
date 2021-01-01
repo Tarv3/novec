@@ -38,7 +38,7 @@ impl<T> StorageObject<T> {
     }
 
     pub fn increase_generation(&mut self) {
-        self.generation += 1;
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub fn is_some(&self) -> bool {

@@ -6,12 +6,10 @@ pub mod loader;
 pub mod novec;
 pub mod oom;
 pub mod map;
-// pub mod chunk;
+pub mod one_way_map;
 
 #[cfg(test)]
 mod test;
-
-// pub use crate::novec::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Hash)]
 pub struct KeyIdx<K, I> {

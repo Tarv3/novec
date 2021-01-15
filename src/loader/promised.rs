@@ -1,9 +1,5 @@
-use super::Convert;
 use cbc::{bounded, Receiver, Sender};
-use std::{
-    error::Error,
-    fmt::{self, Display},
-};
+use std::{convert::TryInto, error::Error, fmt::{self, Display}};
 
 #[derive(Debug)]
 pub enum PromiseError<E> {
@@ -95,7 +91,7 @@ impl<T, U> Promise<T, U> {
 
 impl<T, U> Promise<T, U>
 where
-    U: Convert<T>,
+    U: TryInto<T>,
 {
     pub fn update(&mut self) -> Result<UpdateStatus, PromiseError<U::Error>> {
         match self {
@@ -109,7 +105,7 @@ where
             let receiver = value.unwrap_waiting();
 
             match receiver.try_recv() {
-                Ok(value) => match value.convert() {
+                Ok(value) => match value.try_into() {
                     Ok(owned) => {
                         result = Ok(UpdateStatus::Updated);
                         return Promise::Owned(owned);
@@ -139,7 +135,7 @@ where
                 .or_else(|_| Err(PromiseError::Disconnected))?,
         };
 
-        let owned = match value.convert() {
+        let owned = match value.try_into() {
             Ok(success) => success,
             Err(e) => return Err(PromiseError::LoadError(e)),
         };

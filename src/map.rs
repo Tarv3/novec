@@ -126,8 +126,8 @@ where
     S: ExpandableStorage,
     K: UnorderedStorage,
     K::Item: Hash + Eq,
-    S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
+    S::Index: Into<K::Index> + Copy,
 {
     pub fn contains(&self, ki: &KeyIdx<K::Item, S::Index>) -> bool {
         if let Some(value) = ki.index_ref() {
@@ -369,13 +369,13 @@ where
         self.indices.iter()
     }
 
-    pub fn retain(&mut self, mut f: impl FnMut(&S::Index, &S::Item) -> bool) {
+    pub fn retain(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &mut S::Item) -> bool) {
         let indices = &mut self.indices;
         let keys = &mut self.keys;
         let values = &mut self.storage;
 
-        indices.retain(|_, value| {
-            let item = match values.get(value) {
+        indices.retain(|key, value| {
+            let item = match values.get_mut(value) {
                 Some(item) => item,
                 None => {
                     keys.remove(&(*value).into());
@@ -383,7 +383,7 @@ where
                 }
             };
 
-            if !f(value, item) {
+            if !f(key, value, item) {
                 keys.remove(&(*value).into());
                 values.remove(value);
                 return false;

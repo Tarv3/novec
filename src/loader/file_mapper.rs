@@ -181,6 +181,7 @@ impl<K: Hash + Clone + Eq> FileMapper<K> {
 
             if let Err(_) = into.send(success(mapped)) {
                 // @ErrorHandling
+                dbg!("Load send error");
             }
         }
 

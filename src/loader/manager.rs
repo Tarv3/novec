@@ -49,7 +49,7 @@ where
     C: UnorderedStorage<Index = K::Index>,
     C::Item: Counter,
     L: Loader<Key = K::Item>,
-    L::Item: Convert<T>,
+    L::Item: TryInto<T>,
 {
     storage: StorageSystem<K, S, L, T>,
     counters: C,
@@ -67,17 +67,13 @@ where
     C: UnorderedStorage<Index = K::Index>,
     C::Item: Counter,
     L: Loader<Key = K::Item, Meta = TypeId>,
-    L::Item: Convert<T>,
+    L::Item: TryInto<T>,
 {
     pub fn new(storage: StorageSystem<K, S, L, T>, threshold: C::Item) -> Self
     where
         C: Default,
     {
-        Self {
-            storage,
-            counters: C::default(),
-            threshold,
-        }
+        Self { storage, counters: C::default(), threshold }
     }
 
     pub fn new_with_loader(loader: L, threshold: C::Item) -> Self
@@ -86,11 +82,7 @@ where
         K: Default,
         C: Default,
     {
-        Self {
-            storage: StorageSystem::new_with_loader(loader),
-            counters: C::default(),
-            threshold,
-        }
+        Self { storage: StorageSystem::new_with_loader(loader), counters: C::default(), threshold }
     }
 
     pub fn get(&self, ki: &KeyIdx<K::Item, S::Index>) -> Option<&T> {
@@ -132,7 +124,7 @@ where
 
     pub fn update_loaded(&mut self)
     where
-        L::Item: Convert<T>,
+        L::Item: TryInto<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -144,7 +136,7 @@ where
 
     pub fn update_loaded_blocking(&mut self)
     where
-        L::Item: Convert<T>,
+        L::Item: TryInto<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -156,7 +148,7 @@ where
 
     pub fn on_update_loaded(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
     where
-        L::Item: Convert<T>,
+        L::Item: TryInto<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -169,7 +161,7 @@ where
 
     pub fn on_update_loaded_blocking(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
     where
-        L::Item: Convert<T>,
+        L::Item: TryInto<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -182,26 +174,33 @@ where
 
     pub fn remove_failed<'a>(
         &'a mut self,
-    ) -> impl Iterator<
-        Item = (
-            K::Item,
-            S::Index,
-            PromiseError<<L::Item as Convert<T>>::Error>,
-        ),
-    > + 'a {
+    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError<<L::Item as TryInto<T>>::Error>)> + 'a
+    {
         self.storage.remove_failed()
     }
 
     pub fn increment(&mut self, inc: &C::Item) {
         let storage = &mut self.storage.storage;
         let counters = &mut self.counters;
+
+        for (_, idx, _) in storage.iter_mut() {
+            let counter_idx = (*idx).into();
+
+            if let Some(value) = counters.get_mut(&counter_idx) {
+                value.increment(inc);
+            }
+        }
+    }
+
+    pub fn remove_out_of_date(&mut self) {
+        let storage = &mut self.storage.storage;
+        let counters = &mut self.counters;
         let threshold = &self.threshold;
 
-        storage.retain(|idx, _| {
+        storage.retain(|_, idx, _| {
             let c_idx = (*idx).into();
             let mut result = true;
-            if let Some(value) = counters.get_mut(&c_idx) {
-                value.increment(inc);
+            if let Some(value) = counters.get(&c_idx) {
                 result = value.is_valid(threshold);
             }
 
@@ -213,12 +212,12 @@ where
         });
     }
 
-    pub fn remove_out_of_date(&mut self) {
+    pub fn on_remove_out_of_date(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &mut S::Item)) {
         let storage = &mut self.storage.storage;
         let counters = &mut self.counters;
         let threshold = &self.threshold;
 
-        storage.retain(|idx, _| {
+        storage.retain(|key, idx, item| {
             let c_idx = (*idx).into();
             let mut result = true;
             if let Some(value) = counters.get(&c_idx) {
@@ -227,6 +226,8 @@ where
 
             if !result {
                 counters.remove(&c_idx);
+
+                f(key, idx, item);
             }
 
             result

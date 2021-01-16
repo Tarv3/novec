@@ -1,4 +1,4 @@
-use crate::{*, idvec::IdVecIndex};
+use crate::{idvec::IdVecIndex, *};
 
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct StorageId {
@@ -20,17 +20,11 @@ pub struct StorageObject<T> {
 
 impl<T> StorageObject<T> {
     pub fn new(item: T) -> StorageObject<T> {
-        StorageObject {
-            item: Some(item),
-            generation: 0,
-        }
+        StorageObject { item: Some(item), generation: 0 }
     }
 
     pub fn empty(generation: u64) -> StorageObject<T> {
-        StorageObject {
-            generation,
-            item: None,
-        }
+        StorageObject { generation, item: None }
     }
 
     pub fn generation(&self) -> u64 {
@@ -94,28 +88,22 @@ impl<T> Default for GenerationStorage<T> {
 
 impl<T> GenerationStorage<T> {
     pub fn new() -> GenerationStorage<T> {
-        GenerationStorage {
-            objects: vec![],
-            available: vec![],
-        }
+        GenerationStorage { objects: vec![], available: vec![] }
     }
 
     // Returns what index would be given to an object after n insertions if no deletion occur
     pub fn nth_available(&self, n: usize) -> StorageId {
         if n < self.available.len() {
-            let index = self.available[ self.available.len() - 1 - n];
+            let index = self.available[self.available.len() - 1 - n];
             let generation = self.objects[index].generation + 1;
 
-            return StorageId { index, generation}
+            return StorageId { index, generation };
         }
 
         let overflow = n - self.available.len();
         let index = self.objects.len() + overflow;
 
-        StorageId {
-            index,
-            generation: 0,
-        }
+        StorageId { index, generation: 0 }
     }
 
     pub fn clear(&mut self) {
@@ -124,7 +112,7 @@ impl<T> GenerationStorage<T> {
             self.available.push(i);
         }
     }
-    
+
     pub fn insert(&mut self, id: StorageId, item: T) -> Option<T> {
         if id.index >= self.objects.len() {
             self.fill_to(id.index + 1);
@@ -156,20 +144,14 @@ impl<T> GenerationStorage<T> {
                 self.objects[id].increase_generation();
                 self.objects[id].insert(item);
 
-                StorageId {
-                    index: id,
-                    generation: self.objects[id].generation(),
-                }
+                StorageId { index: id, generation: self.objects[id].generation() }
             }
             None => {
                 let id = self.objects.len();
                 let object = StorageObject::new(item);
                 self.objects.push(object);
 
-                StorageId {
-                    index: id,
-                    generation: 0,
-                }
+                StorageId { index: id, generation: 0 }
             }
         }
     }
@@ -189,14 +171,16 @@ impl<T> GenerationStorage<T> {
     pub fn retain<F: FnMut(&T) -> bool>(&mut self, mut f: F) {
         for (id, object) in self.objects.iter_mut().enumerate() {
             match &object.item {
-                Some(item) => if !f(item) {
-                    object.remove();
-                    self.available.push(id);
-                },
+                Some(item) => {
+                    if !f(item) {
+                        object.remove();
+                        self.available.push(id);
+                    }
+                }
                 None => {}
             }
         }
-    } 
+    }
 
     pub fn remove_id(&mut self, id: StorageId) -> Option<T> {
         if self.contains(id) {
@@ -238,6 +222,14 @@ impl<T> GenerationStorage<T> {
         None
     }
 
+    pub fn get_unchecked(&self, idx: usize) -> Option<&T> {
+        self.objects.get(idx).map(|value| value.item.as_ref()).flatten()
+    }
+
+    pub fn get_mut_unchecked(&mut self, idx: usize) -> Option<&mut T> {
+        self.objects.get_mut(idx).map(|value| value.item.as_mut()).flatten()
+    }
+
     pub fn fill_to(&mut self, size: usize) {
         for i in self.objects.len()..size {
             self.objects.push(StorageObject::empty(0));
@@ -246,17 +238,11 @@ impl<T> GenerationStorage<T> {
     }
 
     pub fn values<'a>(&'a self) -> impl Iterator<Item = &'a T> + 'a {
-        self.objects
-            .iter()
-            .filter(|x| x.is_some())
-            .map(|x| x.unwrap_ref())
+        self.objects.iter().filter(|x| x.is_some()).map(|x| x.unwrap_ref())
     }
 
     pub fn values_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T> + 'a {
-        self.objects
-            .iter_mut()
-            .filter(|x| x.is_some())
-            .map(|x| x.unwrap_mut())
+        self.objects.iter_mut().filter(|x| x.is_some()).map(|x| x.unwrap_mut())
     }
 
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = &StorageObject<T>> + 'a {
@@ -268,35 +254,23 @@ impl<T> GenerationStorage<T> {
     }
 
     pub fn iter_with_ids<'a>(&'a self) -> impl Iterator<Item = (StorageId, &'a T)> + 'a {
-        self.objects
-            .iter()
-            .enumerate()
-            .filter(|(_, x)| x.is_some())
-            .map(|(i, x)| {
-                let generation = x.generation();
-                let id = StorageId {
-                    index: i,
-                    generation,
-                };
+        self.objects.iter().enumerate().filter(|(_, x)| x.is_some()).map(|(i, x)| {
+            let generation = x.generation();
+            let id = StorageId { index: i, generation };
 
-                (id, x.unwrap_ref())
-            })
+            (id, x.unwrap_ref())
+        })
     }
 
-    pub fn iter_with_ids_mut<'a>(&'a mut self) -> impl Iterator<Item = (StorageId, &'a mut T)> + 'a {
-        self.objects
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, x)| x.is_some())
-            .map(|(i, x)| {
-                let generation = x.generation();
-                let id = StorageId {
-                    index: i,
-                    generation,
-                };
+    pub fn iter_with_ids_mut<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = (StorageId, &'a mut T)> + 'a {
+        self.objects.iter_mut().enumerate().filter(|(_, x)| x.is_some()).map(|(i, x)| {
+            let generation = x.generation();
+            let id = StorageId { index: i, generation };
 
-                (id, x.unwrap_mut())
-            })
+            (id, x.unwrap_mut())
+        })
     }
 }
 

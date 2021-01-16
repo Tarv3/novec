@@ -9,7 +9,6 @@ use crate::{
 use cbc::*;
 use std::{
     any::{Any, TypeId},
-    convert::TryInto,
     error::Error,
     fmt::{self, Display, Formatter},
     hash::Hash,
@@ -26,6 +25,11 @@ pub type NoVecLoader<K, T> = NoVecSystem<K, GenericSender<K>, T>;
 
 pub type GenSystem<K, L, T> = StorageSystem<IdVec<K>, GenerationStorage<GenericPromise<T>>, L, T>;
 pub type GenLoader<K, T> = GenSystem<K, GenericSender<K>, T>;
+
+pub trait Convert<T> {
+    type Error;
+    fn convert(self) -> Result<T, Self::Error>;
+}
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum LoadStatus {
@@ -74,6 +78,20 @@ impl GenericResult {
     }
 }
 
+impl<T: 'static> Convert<T> for GenericResult {
+    type Error = GenericError;
+
+    fn convert(self) -> Result<T, Self::Error> {
+        match self {
+            GenericResult::Ok(value) => match (value as Box<dyn Any>).downcast::<T>() {
+                Ok(value) => Ok(*value),
+                Err(_) => Err(GenericError::InvalidType),
+            },
+            GenericResult::Err(e) => Err(GenericError::Error(e)),
+        }
+    }
+}
+
 impl<K> Loader for GenericSender<K> {
     type Key = K;
     type Item = GenericResult;
@@ -98,11 +116,15 @@ where
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
     L: Loader<Key = K::Item>,
-    L::Item: TryInto<T>,
+    L::Item: Convert<T>,
 {
     pub storage: MappedStorage<K, S>,
     pending_load: Vec<S::Index>,
-    load_errors: Vec<(K::Item, S::Index, PromiseError<<L::Item as TryInto<T>>::Error>)>,
+    load_errors: Vec<(
+        K::Item,
+        S::Index,
+        PromiseError<<L::Item as Convert<T>>::Error>,
+    )>,
     loader: L,
 }
 
@@ -115,7 +137,7 @@ where
     S::Index: Into<K::Index> + Copy,
     K::Index: Copy,
     L: Loader<Key = K::Item, Meta = TypeId>,
-    L::Item: TryInto<T>,
+    L::Item: Convert<T>,
 {
     pub fn new() -> Self
     where
@@ -205,7 +227,7 @@ where
 
     pub fn update_loaded(&mut self)
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         let pending = &mut self.pending_load;
         let storage = &mut self.storage;
@@ -229,7 +251,7 @@ where
 
     pub fn update_loaded_blocking(&mut self)
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         let pending = &mut self.pending_load;
         let storage = &mut self.storage;
@@ -254,7 +276,7 @@ where
     // Calls f with each item that is successfully loaded
     pub fn on_update_loaded(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         for (key, idx, value) in self.storage.iter_mut() {
             match value.update() {
@@ -267,7 +289,7 @@ where
 
     pub fn on_update_loaded_blocking(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         for (key, idx, value) in self.storage.iter_mut() {
             match value.update_blocking() {
@@ -284,8 +306,13 @@ where
 
     pub fn remove_failed<'a>(
         &'a mut self,
-    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError<<L::Item as TryInto<T>>::Error>)> + 'a
-    {
+    ) -> impl Iterator<
+        Item = (
+            K::Item,
+            S::Index,
+            PromiseError<<L::Item as Convert<T>>::Error>,
+        ),
+    > + 'a {
         for (_, idx, _) in self.load_errors.iter() {
             self.storage.remove_with_index(idx);
         }

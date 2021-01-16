@@ -49,7 +49,7 @@ where
     C: UnorderedStorage<Index = K::Index>,
     C::Item: Counter,
     L: Loader<Key = K::Item>,
-    L::Item: TryInto<T>,
+    L::Item: Convert<T>,
 {
     storage: StorageSystem<K, S, L, T>,
     counters: C,
@@ -67,7 +67,7 @@ where
     C: UnorderedStorage<Index = K::Index>,
     C::Item: Counter,
     L: Loader<Key = K::Item, Meta = TypeId>,
-    L::Item: TryInto<T>,
+    L::Item: Convert<T>,
 {
     pub fn new(storage: StorageSystem<K, S, L, T>, threshold: C::Item) -> Self
     where
@@ -124,7 +124,7 @@ where
 
     pub fn update_loaded(&mut self)
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -136,7 +136,7 @@ where
 
     pub fn update_loaded_blocking(&mut self)
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -148,7 +148,7 @@ where
 
     pub fn on_update_loaded(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -161,7 +161,7 @@ where
 
     pub fn on_update_loaded_blocking(&mut self, mut f: impl FnMut(&K::Item, &S::Index, &T))
     where
-        L::Item: TryInto<T>,
+        L::Item: Convert<T>,
     {
         let storage = &mut self.storage;
         let counters = &mut self.counters;
@@ -174,7 +174,7 @@ where
 
     pub fn remove_failed<'a>(
         &'a mut self,
-    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError<<L::Item as TryInto<T>>::Error>)> + 'a
+    ) -> impl Iterator<Item = (K::Item, S::Index, PromiseError<<L::Item as Convert<T>>::Error>)> + 'a
     {
         self.storage.remove_failed()
     }

@@ -64,7 +64,9 @@ impl<T> IdVec<T> {
         self.container[index].as_ref()
     }
 
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+    pub fn get_mut(&mut self, index: impl Into<IdVecIndex>) -> Option<&mut T> {
+        let index = *index.into();
+
         if index >= self.container.len() {
             return None;
         }

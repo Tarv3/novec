@@ -43,6 +43,14 @@ impl<T> StorageObject<T> {
         self.item.is_none()
     }
 
+    pub fn item(&self) -> Option<&T> {
+        self.item.as_ref()
+    }
+
+    pub fn item_mut(&mut self) -> Option<&mut T> {
+        self.item.as_mut()
+    }
+
     pub fn unwrap(self) -> T {
         self.item.unwrap()
     }

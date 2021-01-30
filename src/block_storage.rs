@@ -70,11 +70,16 @@ impl BlockIdx {
 }
 
 pub struct Block<'a, T> {
+    key: BlockKey,
     len: &'a mut usize,
     data: &'a mut [MaybeUninit<T>],
 }
 
 impl<'a, T> Block<'a, T> {
+    pub fn return_key(self) -> BlockKey {
+        self.key
+    }
+
     pub fn len(&self) -> usize {
         *self.len
     }
@@ -214,7 +219,7 @@ impl<T> BlockStorage<T> {
         }
     }
 
-    pub fn get<'a: 'b, 'b>(&'a self, key: &'b BlockKey) -> Option<Block<'b, T>> {
+    pub fn get(&self, key: BlockKey) -> Option<Block<T>> {
         if key.generation != self.generation {
             return None;
         }
@@ -233,7 +238,7 @@ impl<T> BlockStorage<T> {
             // should have been determined during the creation of this key
             let slice = &mut data[start..start + size];
 
-            Some(Block { len, data: slice })
+            Some(Block { key, len, data: slice })
         }
     }
 

@@ -7,6 +7,7 @@ pub mod novec;
 pub mod oom;
 pub mod map;
 pub mod one_way_map;
+pub mod block_storage;
 
 #[cfg(test)]
 mod test;

@@ -155,7 +155,6 @@ impl<'a, T> IndexMut<usize> for Block<'a, T> {
 
 pub struct BlockStorage<T> {
     block_size: usize,
-
     generation: usize,
     active_keys: HashSet<InternalBlockKey>,
     blocks: UnsafeCell<Vec<BlockIdx>>,

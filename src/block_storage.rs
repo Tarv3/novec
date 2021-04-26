@@ -1,6 +1,6 @@
 use std::{
     cell::UnsafeCell,
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     hash::Hash,
     mem::MaybeUninit,
     ops::{Index, IndexMut},
@@ -22,14 +22,28 @@ struct InternalBlockKey {
     blocks: usize,
 }
 
+impl PartialOrd for InternalBlockKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.idx.partial_cmp(&other.idx)
+    }
+}
+
+impl Ord for InternalBlockKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.idx.cmp(&other.idx)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockIdx {
     /// Stores the number of elements that are initialized from the start of this block
     OwnedStart(usize),
-    Owned,
+    /// Stores the start of this empty block
+    Owned(usize),
     /// Stores the number of blocks after this block that are also empty
     EmptyStart(usize),
-    Emtpy,
+    /// Stores the start of this empty block
+    Emtpy(usize),
 }
 
 impl BlockIdx {
@@ -157,6 +171,7 @@ pub struct BlockStorage<T> {
     block_size: usize,
     generation: usize,
     active_keys: HashSet<InternalBlockKey>,
+    available_blocks: BTreeSet<usize>,
     blocks: UnsafeCell<Vec<BlockIdx>>,
     data: UnsafeCell<Vec<MaybeUninit<T>>>,
 }
@@ -173,6 +188,7 @@ impl<T> BlockStorage<T> {
             block_size,
             generation: 0,
             active_keys: HashSet::new(),
+            available_blocks: BTreeSet::new(),
             blocks: UnsafeCell::new(vec![]),
             data: UnsafeCell::new(vec![]),
         }
@@ -200,22 +216,37 @@ impl<T> BlockStorage<T> {
         self.generation += 1;
         self.clear_data();
         self.active_keys.clear();
+        self.available_blocks.clear();
     }
 
-    fn push_empty_blocks(&mut self, to_insert: usize) {
+    /// Pushes empty blocks until the last block contains 'size' number of blocks
+    fn push_empty_blocks_until(&mut self, size: usize) -> InternalBlockKey {
+        let blocks;
+        let data;
+
+        // We have a mutable reference to self so this is allowed
         unsafe {
-            // We have a mutable reference to self so this is allowed
-            let blocks = &mut *self.blocks.get();
-            let data = &mut *self.data.get();
+            blocks = &mut *self.blocks.get();
+            data = &mut *self.data.get();
+        }
 
-            for _ in 0..to_insert {
-                blocks.push(BlockIdx::Emtpy);
+        let (parent, empty_size) = match blocks.last() {
+            Some(BlockIdx::Emtpy(parent)) => (*parent, blocks[*parent].get_empty_count()),
+            Some(BlockIdx::EmptyStart(count)) => (blocks.len() - 1, *count), 
+            _ => (blocks.len(), 0),
+        };
 
-                for _ in 0..self.block_size {
-                    data.push(MaybeUninit::uninit());
-                }
+        for _ in empty_size..size {
+            blocks.push(BlockIdx::Emtpy(parent));
+
+            for _ in 0..self.block_size {
+                data.push(MaybeUninit::uninit());
             }
         }
+
+        blocks[parent] = BlockIdx::EmptyStart(size);
+
+        InternalBlockKey { idx: parent, blocks: size }
     }
 
     pub fn get(&self, key: BlockKey) -> Option<Block<T>> {
@@ -241,6 +272,75 @@ impl<T> BlockStorage<T> {
         }
     }
 
+    pub fn remove(&mut self, key: BlockKey) {
+        if key.generation != self.generation {
+            return;
+        }
+
+        let blocks;
+        let data;
+
+        // If no two keys can point to the same blocks then this is safe
+        unsafe {
+            blocks = &mut *self.blocks.get();
+            data = &mut *self.data.get();
+        }
+
+        match blocks[key.idx] {
+            BlockIdx::Owned(_) | BlockIdx::EmptyStart(_) | BlockIdx::Emtpy(_) => return,
+            BlockIdx::OwnedStart(_) => {}
+        }
+
+        let start = key.idx * self.block_size;
+        let size = key.blocks * self.block_size;
+
+        // Deallocate the values
+        for value in data[start..start + size].iter_mut() {
+            let value = std::mem::replace(value, MaybeUninit::uninit());
+            unsafe { value.assume_init() };
+        }
+
+        let next_block = key.idx + key.blocks;
+
+        let end = match blocks.get(next_block) {
+            // If the next block is an empty block then it must be an empty start and we can combine
+            // it into this emtpy block
+            Some(BlockIdx::EmptyStart(count)) => {
+                self.available_blocks.remove(&next_block);
+                next_block + count
+            }
+            _ => next_block
+        };
+
+        let start = match key.idx {
+            // Check if the previous block is emtpy
+            x if x > 0 => match blocks.get(x - 1) {
+                // If previous block is empty then the new parent for this block will be that 
+                // block's parent
+                Some(BlockIdx::Emtpy(parent)) => {
+                    self.available_blocks.remove(parent);
+                    *parent
+                },
+                Some(BlockIdx::EmptyStart(_)) => {
+                    let parent = x - 1;
+                    self.available_blocks.remove(&parent);
+                    parent
+                }
+                _ => x,
+            }
+            _ => key.idx
+        };
+
+        let count = end - start; 
+        blocks[start] = BlockIdx::EmptyStart(count);
+
+        for i in 1..count {
+            blocks[start + i] = BlockIdx::Emtpy(start);
+        }
+
+        self.available_blocks.insert(start);
+    }
+
     pub fn create(&mut self, size: usize) -> BlockKey {
         if size == 0 {
             panic!("Tried to create empty block");
@@ -252,9 +352,9 @@ impl<T> BlockStorage<T> {
         let mut block_id = None;
         let mut min_diff = None;
 
-        // Search for the smallest block that can fit the required size
-        for (i, block) in blocks.iter().enumerate().filter(|(_, block)| block.is_empty_start()) {
-            let size = block.get_empty_count() + 1;
+        for block_idx in self.available_blocks.iter() {
+            let block = blocks[*block_idx];
+            let size = block.get_empty_count();
 
             if size < required_blocks {
                 continue;
@@ -263,41 +363,70 @@ impl<T> BlockStorage<T> {
             let diff = size - required_blocks;
 
             if diff == 0 {
-                block_id = Some(i);
+                block_id = Some(*block_idx);
                 break;
             }
 
             if Some(diff) < min_diff {
                 min_diff = Some(diff);
-                block_id = Some(i);
+                block_id = Some(*block_idx);
             }
         }
+
+        // Search for the smallest block that can fit the required size
+        // TODO: Make this not a linear search through all of the blocks
+        // for (i, block) in blocks.iter().enumerate().filter(|(_, block)| block.is_empty_start()) {
+        //     let size = block.get_empty_count() + 1;
+
+        //     if size < required_blocks {
+        //         continue;
+        //     }
+
+        //     let diff = size - required_blocks;
+
+        //     if diff == 0 {
+        //         block_id = Some(i);
+        //         break;
+        //     }
+
+        //     if Some(diff) < min_diff {
+        //         min_diff = Some(diff);
+        //         block_id = Some(i);
+        //     }
+        // }
 
         let block_id = match block_id {
             Some(id) => id,
             // There was not a large enough block so we create a new one
             None => {
-                let id = blocks.len();
-                self.push_empty_blocks(required_blocks);
-                blocks[id] = BlockIdx::EmptyStart(required_blocks - 1);
-
-                id
+                let id = self.push_empty_blocks_until(required_blocks);
+                id.idx
             }
         };
 
+        self.available_blocks.remove(&block_id);
+
         let start = blocks[block_id];
         let empty_count = start.get_empty_count();
-        let next_start = block_id + required_blocks;
 
-        if let Some(BlockIdx::Emtpy) = blocks.get(next_start) {
-            blocks[next_start] = BlockIdx::EmptyStart(empty_count - required_blocks);
+        if empty_count > required_blocks {
+            let idx = block_id + required_blocks;
+            let block_count = empty_count - required_blocks;
+
+            blocks[idx] = BlockIdx::EmptyStart(block_count);
+
+            for i in 1..block_count {
+                blocks[idx + i] = BlockIdx::Emtpy(idx);
+            }
+
+            self.available_blocks.insert(idx);
         }
 
         blocks[block_id] = BlockIdx::OwnedStart(0);
 
         for i in 1..required_blocks {
             let owned_id = block_id + i;
-            blocks[owned_id] = BlockIdx::Owned;
+            blocks[owned_id] = BlockIdx::Owned(block_id);
         }
 
         let internal = InternalBlockKey { idx: block_id, blocks: required_blocks };

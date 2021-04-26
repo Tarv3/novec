@@ -98,6 +98,10 @@ impl<'a, T> Block<'a, T> {
         *self.len
     }
 
+    pub fn capacity(&self) -> usize {
+        self.data.len()
+    }
+
     pub fn push(&mut self, item: T) -> Option<T> {
         if *self.len >= self.data.len() {
             return Some(item);
@@ -292,10 +296,10 @@ impl<T> BlockStorage<T> {
         }
 
         let start = key.idx * self.block_size;
-        let size = key.blocks * self.block_size;
+        let allocated = blocks[key.idx].get_allocated_count();
 
         // Deallocate the values
-        for value in data[start..start + size].iter_mut() {
+        for value in data[start..start + allocated].iter_mut() {
             let value = std::mem::replace(value, MaybeUninit::uninit());
             unsafe { value.assume_init() };
         }
@@ -373,28 +377,6 @@ impl<T> BlockStorage<T> {
             }
         }
 
-        // Search for the smallest block that can fit the required size
-        // TODO: Make this not a linear search through all of the blocks
-        // for (i, block) in blocks.iter().enumerate().filter(|(_, block)| block.is_empty_start()) {
-        //     let size = block.get_empty_count() + 1;
-
-        //     if size < required_blocks {
-        //         continue;
-        //     }
-
-        //     let diff = size - required_blocks;
-
-        //     if diff == 0 {
-        //         block_id = Some(i);
-        //         break;
-        //     }
-
-        //     if Some(diff) < min_diff {
-        //         min_diff = Some(diff);
-        //         block_id = Some(i);
-        //     }
-        // }
-
         let block_id = match block_id {
             Some(id) => id,
             // There was not a large enough block so we create a new one
@@ -434,4 +416,301 @@ impl<T> BlockStorage<T> {
 
         BlockKey { idx: block_id, blocks: required_blocks, generation: self.generation }
     }
+}
+
+
+#[cfg(test)]
+mod test {
+    use std::sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc,
+    };
+    use std::collections::BTreeSet;
+
+    use super::BlockStorage;
+    
+
+    pub struct DropTest {
+        value: Arc<AtomicI32>,
+    }
+    
+    impl DropTest {
+        pub fn new(value: Arc<AtomicI32>) -> Self {
+            value.fetch_add(1, Ordering::SeqCst);
+            println!("Created");
+            Self { value }
+        }
+    }
+    
+    impl Drop for DropTest {
+        fn drop(&mut self) {
+            println!("Dropped");
+            self.value.fetch_add(-1, Ordering::SeqCst);
+        }
+    }
+
+    /// Simple test for testing that values get dropped correctly when clearing/dropping the storage
+    #[test]
+    fn drop_test() {
+        let mut storage = BlockStorage::<DropTest>::new(10);
+    
+        let idx1 = storage.create(3);
+        let idx2 = storage.create(15);
+    
+        println!("1: {:?}, 2: {:?}", idx1, idx2);
+    
+        let mut block1 = storage.get(idx1).unwrap();
+        let mut block2 = storage.get(idx2).unwrap();
+    
+        let value = Arc::new(AtomicI32::new(0));
+    
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+    
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+    
+        block1.return_key();
+        block2.return_key();
+    
+        assert!(value.load(Ordering::SeqCst) == 6);
+        storage.clear();
+        assert!(value.load(Ordering::SeqCst) == 0);
+
+        let idx1 = storage.create(3);
+        let idx2 = storage.create(15);
+
+        let mut block1 = storage.get(idx1).unwrap();
+        let mut block2 = storage.get(idx2).unwrap();
+    
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+    
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+        assert!(value.load(Ordering::SeqCst) == 6);
+        drop(storage);
+        assert!(value.load(Ordering::SeqCst) == 0);
+    }
+    
+    #[test]
+    fn remove_isolated_test() {
+        let mut storage = BlockStorage::<DropTest>::new(10);
+        let idx1 = storage.create(10);
+        let idx2 = storage.create(20);
+        let idx3 = storage.create(10);
+        let value = Arc::new(AtomicI32::new(0));
+        
+        let mut block1 = storage.get(idx1).unwrap();
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+
+        let mut block2 = storage.get(idx2).unwrap();
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+
+        let mut block3 = storage.get(idx3).unwrap();
+        block3.push(DropTest::new(value.clone()));
+        block3.push(DropTest::new(value.clone()));
+
+        assert!(value.load(Ordering::SeqCst) == 7);
+
+        let idx2 = block2.return_key();
+        storage.remove(idx2);
+        assert!(value.load(Ordering::SeqCst) == 4);
+
+        let mut set = BTreeSet::new(); 
+        set.insert(1);
+
+        assert!(storage.available_blocks == set);
+    }   
+
+    #[test]
+    fn remove_left_missing_test() {
+        let mut storage = BlockStorage::<DropTest>::new(10);
+        let idx1 = storage.create(10);
+        let idx2 = storage.create(20);
+        let idx3 = storage.create(10);
+        let value = Arc::new(AtomicI32::new(0));
+        
+        let mut block1 = storage.get(idx1).unwrap();
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+
+        let mut block2 = storage.get(idx2).unwrap();
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+
+        let mut block3 = storage.get(idx3).unwrap();
+        block3.push(DropTest::new(value.clone()));
+        block3.push(DropTest::new(value.clone()));
+
+        assert!(value.load(Ordering::SeqCst) == 7);
+        let idx1 = block1.return_key();
+        let idx2 = block2.return_key();
+        storage.remove(idx1);
+        assert!(value.load(Ordering::SeqCst) == 5);
+        let mut set = BTreeSet::new(); 
+        set.insert(0);
+        assert!(storage.available_blocks == set);
+
+        storage.remove(idx2);
+        assert!(value.load(Ordering::SeqCst) == 2);
+
+        let mut set = BTreeSet::new(); 
+        set.insert(0);
+
+        assert!(storage.available_blocks == set);
+
+        // Check that the 0th block is one cohesive block that can be allocated entirely
+        let idx4 = storage.create(30);
+        assert!(idx4.idx == 0);
+        assert!(idx4.blocks == 3);
+
+        assert!(storage.available_blocks == BTreeSet::new());
+    }   
+
+    #[test]
+    fn remove_right_missing_test() {
+        let mut storage = BlockStorage::<DropTest>::new(10);
+        let idx1 = storage.create(10);
+        let idx2 = storage.create(20);
+        let idx3 = storage.create(10);
+        let value = Arc::new(AtomicI32::new(0));
+        
+        let mut block1 = storage.get(idx1).unwrap();
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+
+        let mut block2 = storage.get(idx2).unwrap();
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+
+        let mut block3 = storage.get(idx3).unwrap();
+        block3.push(DropTest::new(value.clone()));
+        block3.push(DropTest::new(value.clone()));
+
+        assert!(value.load(Ordering::SeqCst) == 7);
+        let idx1 = block1.return_key();
+        let idx2 = block2.return_key();
+        
+        storage.remove(idx2);
+        assert!(value.load(Ordering::SeqCst) == 4);
+        let mut set = BTreeSet::new(); 
+        set.insert(1);
+        assert!(storage.available_blocks == set);
+        
+        storage.remove(idx1);
+        assert!(value.load(Ordering::SeqCst) == 2);
+
+        let mut set = BTreeSet::new(); 
+        set.insert(0);
+
+        assert!(storage.available_blocks == set);
+
+        // Check that the 0th block is one cohesive block that can be allocated entirely
+        let idx4 = storage.create(30);
+        assert!(idx4.idx == 0);
+        assert!(idx4.blocks == 3);
+
+        assert!(storage.available_blocks == BTreeSet::new());
+    }   
+
+    #[test]
+    fn remove_left_right_missing_test() {
+        let mut storage = BlockStorage::<DropTest>::new(10);
+        let idx1 = storage.create(10);
+        let idx2 = storage.create(20);
+        let idx3 = storage.create(10);
+        let value = Arc::new(AtomicI32::new(0));
+        
+        let mut block1 = storage.get(idx1).unwrap();
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+
+        let mut block2 = storage.get(idx2).unwrap();
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+
+        let mut block3 = storage.get(idx3).unwrap();
+        block3.push(DropTest::new(value.clone()));
+        block3.push(DropTest::new(value.clone()));
+
+        assert!(value.load(Ordering::SeqCst) == 7);
+        let idx1 = block1.return_key();
+        let idx2 = block2.return_key();
+        let idx3 = block3.return_key();
+        
+        storage.remove(idx1);
+        assert!(value.load(Ordering::SeqCst) == 5);
+        let mut set = BTreeSet::new(); 
+        set.insert(0);
+        assert!(storage.available_blocks == set);
+
+        storage.remove(idx3);
+        assert!(value.load(Ordering::SeqCst) == 3);
+        let mut set = BTreeSet::new(); 
+        set.insert(0);
+        set.insert(3);
+        assert!(storage.available_blocks == set);
+        
+        storage.remove(idx2);
+        assert!(value.load(Ordering::SeqCst) == 0);
+
+        let mut set = BTreeSet::new(); 
+        set.insert(0);
+
+        assert!(storage.available_blocks == set);
+
+        let idx4 = storage.create(40);
+        assert!(idx4.idx == 0);
+        assert!(idx4.blocks == 4);
+        assert!(storage.available_blocks == BTreeSet::new());
+    }   
+
+    #[test]
+    fn remove_end_test() {
+        let mut storage = BlockStorage::<DropTest>::new(10);
+        let idx1 = storage.create(10);
+        let idx2 = storage.create(20);
+        let idx3 = storage.create(10);
+        let value = Arc::new(AtomicI32::new(0));
+        
+        let mut block1 = storage.get(idx1).unwrap();
+        block1.push(DropTest::new(value.clone()));
+        block1.push(DropTest::new(value.clone()));
+
+        let mut block2 = storage.get(idx2).unwrap();
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+        block2.push(DropTest::new(value.clone()));
+
+        let mut block3 = storage.get(idx3).unwrap();
+        block3.push(DropTest::new(value.clone()));
+        block3.push(DropTest::new(value.clone()));
+
+        assert!(value.load(Ordering::SeqCst) == 7);
+        let idx3 = block3.return_key();
+        
+        storage.remove(idx3);
+        assert!(value.load(Ordering::SeqCst) == 5);
+        let mut set = BTreeSet::new(); 
+        set.insert(3);
+        assert!(storage.available_blocks == set);
+
+        // Check that the 0th block is one cohesive block that can be allocated entirely
+        let idx4 = storage.create(20);
+        assert!(idx4.idx == 3);
+        assert!(idx4.blocks == 2);
+
+        assert!(storage.available_blocks == BTreeSet::new());
+    }  
 }

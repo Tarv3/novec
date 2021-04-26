@@ -20,6 +20,10 @@ impl<T> IdVec<T> {
         Self { container: vec![] }
     }
 
+    pub fn clear(&mut self) {
+        self.container.clear();
+    }
+
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             container: Vec::with_capacity(cap),

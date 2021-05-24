@@ -253,6 +253,22 @@ impl<T> BlockStorage<T> {
         InternalBlockKey { idx: parent, blocks: size }
     }
 
+    pub fn get_len(&self, key: &BlockKey) -> Option<usize> {
+        if key.generation != self.generation {
+            return None;
+        }
+
+        // If no two keys can point to the same blocks then this is safe
+        unsafe {
+            let blocks = &*self.blocks.get();
+
+            // This is a unique reference if 'key.idx' is unique
+            let len = blocks[key.idx].get_allocated_count();
+
+            Some(len)
+        }
+    }
+
     pub fn get(&self, key: BlockKey) -> Option<Block<T>> {
         if key.generation != self.generation {
             return None;

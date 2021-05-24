@@ -52,4 +52,37 @@ macro_rules! create_storage {
             }
         }
     };
+    ($name:ident < $($generic:ident),+ > { $($component:ident : $component_type:ty),+ }) => {
+        pub struct $name <$(generic),+> {
+            $(
+                pub $component: <$component_type as Component>::Storage,
+            )+
+        }
+
+        impl<$(generic),+> ComponentStorage for $name<$(generic),+> {
+            fn get<T: Any + Component>(&self) -> Option<&T::Storage> {
+                use std::any::TypeId;
+                unsafe {
+                    match TypeId::of::<T>() {
+                        $(
+                            x if x == TypeId::of::<$component_type>() => Some(std::mem::transmute(&self.$component)),
+                        )+
+                        _ => None
+                    }
+                }
+            }
+
+            fn get_mut<'a, T: 'a + Any + Component>(&'a mut self) -> Option<&'a mut T::Storage> {
+                use std::any::TypeId;
+                unsafe {
+                    match TypeId::of::<T>() {
+                        $(
+                            x if x == TypeId::of::<$component_type>() => Some(std::mem::transmute(&mut self.$component)),
+                        )+
+                        _ => None
+                    }
+                }
+            }
+        }
+    };
 }
